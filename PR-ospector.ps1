@@ -571,7 +571,7 @@ function Update-AzDOConfigFromDiscover {
     $true
 }
 
-function Get-AzDOPullDashboard {
+function Get-AzDOPulls {
     [CmdletBinding(DefaultParameterSetName='ConfigPath')]
     param(
         [Parameter(ParameterSetName='ConfigPath')]
@@ -762,5 +762,5 @@ function Get-AzDOPullDashboard {
 }
 
 if ($MyInvocation.InvocationName -ne '.') {
-    Get-AzDOPullDashboard @PSBoundParameters
+    Get-AzDOPulls @PSBoundParameters
 }
