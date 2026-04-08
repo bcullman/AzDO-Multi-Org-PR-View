@@ -1,0 +1,15 @@
+organizations:
+  - name: org1
+    pat: "$env:PAT_AZDO"
+    groups:
+      - AD-Group
+    projects:
+      - ProjectA
+      - ProjectB
+
+  - name: org2
+    pat: pat-as-string
+    groups:
+      - Another-Group
+    projects:
+      - SharedPlatform
