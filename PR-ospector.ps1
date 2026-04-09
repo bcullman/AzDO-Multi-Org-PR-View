@@ -1,7 +1,7 @@
 [CmdletBinding(DefaultParameterSetName = 'ConfigPath')]
 param(
     [Parameter(ParameterSetName = 'ConfigPath')]
-    [string]$ConfigPath = 'config.yml',
+    [string]$ConfigPath = (Join-Path $PSScriptRoot 'config.yml'),
 
     [Parameter(Mandatory = $true, ParameterSetName = 'Direct')]
     [string]$Org,
@@ -575,7 +575,7 @@ function Get-AzDOPulls {
     [CmdletBinding(DefaultParameterSetName='ConfigPath')]
     param(
         [Parameter(ParameterSetName='ConfigPath')]
-        [string]$ConfigPath='config.yml',
+        [string]$ConfigPath,
 
         [Parameter(Mandatory=$true,ParameterSetName='Direct')]
         [string]$Org,
@@ -595,6 +595,10 @@ function Get-AzDOPulls {
         [Parameter(ParameterSetName='Direct')]
         [object[]]$Groups=@()
     )
+
+    if ($PSCmdlet.ParameterSetName -eq 'ConfigPath' -and [string]::IsNullOrWhiteSpace($ConfigPath)) {
+        $ConfigPath = $script:ConfigPath
+    }
 
     $configs=Get-AzDOConfigCollection -ConfigPath $ConfigPath -Org $Org -Pat $Pat -Groups $Groups -IsDirect ($PSCmdlet.ParameterSetName -eq 'Direct')
     $allResults=[System.Collections.Generic.List[object]]::new()
