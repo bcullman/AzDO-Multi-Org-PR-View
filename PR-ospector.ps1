@@ -15,6 +15,9 @@ param(
     [ValidateSet('active', 'completed', 'abandoned', 'all')]
     [string]$Status = 'active',
 
+    [ValidateSet('Pending', 'All')]
+    [string]$ReviewState = 'Pending',
+
     [ValidateSet('Configured', 'Discover')]
     [string]$Mode = 'Configured',
 
@@ -342,6 +345,52 @@ function New-AzDORecord {
     }
 }
 
+function Get-AzDOReviewerVote {
+    param([object]$Reviewer)
+
+    if ($null -eq $Reviewer) { return $null }
+
+    $voteProperty=$Reviewer.PSObject.Properties['vote']
+
+    if ($null -ne $voteProperty -and $null -ne $voteProperty.Value) {
+        return [int]$voteProperty.Value
+    }
+
+    $votes=@(
+        @($Reviewer.votedFor) |
+            ForEach-Object {
+                $memberVoteProperty=$_.PSObject.Properties['vote']
+
+                if ($null -ne $memberVoteProperty -and $null -ne $memberVoteProperty.Value) {
+                    [int]$memberVoteProperty.Value
+                }
+            } |
+            Where-Object { $null -ne $_ }
+    )
+
+    if ($votes.Count -eq 0) { return $null }
+
+    $nonZeroVote=@($votes | Where-Object { $_ -ne 0 } | Select-Object -First 1)
+
+    if ($nonZeroVote.Count -gt 0) { return [int]$nonZeroVote[0] }
+
+    if ($votes -contains 0) { return 0 }
+
+    $votes[0]
+}
+
+function Test-AzDOReviewerIsPending {
+    param([object]$Reviewer)
+
+    if ($null -eq $Reviewer) { return $false }
+
+    if ($Reviewer.hasDeclined -eq $true) { return $false }
+
+    $vote=Get-AzDOReviewerVote -Reviewer $Reviewer
+
+    $null -eq $vote -or $vote -eq 0
+}
+
 function Get-AzDOCreatedRecords {
     param(
         [string]$OrganizationName,
@@ -370,7 +419,8 @@ function Get-AzDORequestedReviewRecords {
         [hashtable]$Headers,
         [object]$AuthenticatedUser,
         [string]$Status,
-        [object[]]$ResolvedGroups
+        [object[]]$ResolvedGroups,
+        [string]$ReviewState
     )
 
     $results=@{}
@@ -407,13 +457,13 @@ function Get-AzDORequestedReviewRecords {
 
             $matched=@($pr.reviewers) | Where-Object {$_.id -eq $target.Id} | Select-Object -First 1
 
-            if ($target.Kind -eq 'User') {
-                if (-not ($matched -and (($null -eq $matched.vote -or [int]$matched.vote -eq 0) -and $matched.hasDeclined -ne $true))) {
-                    continue
-                }
-            }elseif (($matched -and $matched.hasDeclined -eq $true) -or $results.ContainsKey($pr.pullRequestId)) {
+            if (-not $matched) { continue }
+
+            if ($ReviewState -eq 'Pending' -and -not (Test-AzDOReviewerIsPending -Reviewer $matched)) {
                 continue
             }
+
+            if ($results.ContainsKey($pr.pullRequestId)) { continue }
 
             $results[$pr.pullRequestId]=New-AzDORecord `
                 -OrganizationName $OrganizationName `
@@ -437,7 +487,8 @@ function Get-AzDOProjectViewRecords {
         [object]$AuthenticatedUser,
         [string]$View,
         [string]$Status,
-        [object[]]$ResolvedGroups
+        [object[]]$ResolvedGroups,
+        [string]$ReviewState
     )
 
     switch($View) {
@@ -446,13 +497,13 @@ function Get-AzDOProjectViewRecords {
         }
 
         'ReviewRequested' {
-            @(Get-AzDORequestedReviewRecords -OrganizationName $OrganizationName -ProjectName $ProjectName -Headers $Headers -AuthenticatedUser $AuthenticatedUser -Status $Status -ResolvedGroups $ResolvedGroups)
+            @(Get-AzDORequestedReviewRecords -OrganizationName $OrganizationName -ProjectName $ProjectName -Headers $Headers -AuthenticatedUser $AuthenticatedUser -Status $Status -ResolvedGroups $ResolvedGroups -ReviewState $ReviewState)
         }
 
         'Both' {
             @(
                 @(Get-AzDOCreatedRecords -OrganizationName $OrganizationName -ProjectName $ProjectName -Headers $Headers -AuthenticatedUser $AuthenticatedUser -Status $Status) +
-                @(Get-AzDORequestedReviewRecords -OrganizationName $OrganizationName -ProjectName $ProjectName -Headers $Headers -AuthenticatedUser $AuthenticatedUser -Status $Status -ResolvedGroups $ResolvedGroups)
+                @(Get-AzDORequestedReviewRecords -OrganizationName $OrganizationName -ProjectName $ProjectName -Headers $Headers -AuthenticatedUser $AuthenticatedUser -Status $Status -ResolvedGroups $ResolvedGroups -ReviewState $ReviewState)
             )
         }
     }
@@ -466,14 +517,15 @@ function Get-AzDOProjectResult {
         [object]$AuthenticatedUser,
         [string]$View,
         [string]$Status,
-        [object[]]$ResolvedGroups
+        [object[]]$ResolvedGroups,
+        [string]$ReviewState
     )
 
     $start=Get-Date
 
     try{
         $records=@(
-            Get-AzDOProjectViewRecords -OrganizationName $OrganizationName -ProjectName $Project.name -Headers $Headers -AuthenticatedUser $AuthenticatedUser -View $View -Status $Status -ResolvedGroups $ResolvedGroups
+            Get-AzDOProjectViewRecords -OrganizationName $OrganizationName -ProjectName $Project.name -Headers $Headers -AuthenticatedUser $AuthenticatedUser -View $View -Status $Status -ResolvedGroups $ResolvedGroups -ReviewState $ReviewState
         )
 
         $end=Get-Date
@@ -589,6 +641,9 @@ function Get-AzDOPulls {
         [ValidateSet('active','completed','abandoned','all')]
         [string]$Status='active',
 
+        [ValidateSet('Pending','All')]
+        [string]$ReviewState='Pending',
+
         [ValidateSet('Configured','Discover')]
         [string]$Mode='Configured',
 
@@ -680,7 +735,7 @@ function Get-AzDOPulls {
             $projectResults=[System.Collections.Generic.List[object]]::new()
 
             foreach ($project in $projects) {
-                $r=Get-AzDOProjectResult -OrganizationName $config.Name -Project $project -Headers $headers -AuthenticatedUser $me -View $View -Status $Status -ResolvedGroups $resolved
+                $r=Get-AzDOProjectResult -OrganizationName $config.Name -Project $project -Headers $headers -AuthenticatedUser $me -View $View -Status $Status -ResolvedGroups $resolved -ReviewState $ReviewState
                 $projectResults.Add($r) | Out-Null
 
                 if ($r.ErrorMessage) {
