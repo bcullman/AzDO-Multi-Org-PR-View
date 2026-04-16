@@ -6,6 +6,7 @@ The first tool in the repo is `PR-ospector.ps1`, a cross-organization pull reque
 - What PRs did I create?
 - What PRs are waiting on me?
 - What PRs are waiting on one of my reviewer groups?
+- Which requested reviews still need action versus ones I've already handled?
 
 By default, it reads `config.yml` and only scans the projects you list there.
 
@@ -15,6 +16,7 @@ This repo is really only useful for Azure DevOps users. If you do not actively w
 It is aimed at people who:
 - work across multiple Azure DevOps organizations
 - need a single view of created and requested-review PRs
+- want the default requested-review list to stay focused on actionable review requests
 - want a lightweight script instead of opening each org and project manually
 
 ## Current Tools
@@ -109,11 +111,19 @@ Useful options:
 - `-View Both` to show both created and requested-review sections
 - `-View Created` to show only PRs created by the authenticated user
 - `-View ReviewRequested` to show only PRs where review is requested from the authenticated user or configured groups
+- `-ReviewState Pending` to keep requested-review results limited to actionable review requests; this is the default
+- `-ReviewState All` to include all open requested-review PRs, even if you or a configured group already voted on them
 
 Direct usage without config is also supported:
 
 ```powershell
 .\PR-ospector.ps1 -Org org1 -Pat "$env:PAT_AZDO" -Groups AD-Group
+```
+
+To see every open requested-review PR instead of only actionable ones:
+
+```powershell
+.\PR-ospector.ps1 -View ReviewRequested -ReviewState All
 ```
 
 When `-Org` is provided, the script uses direct parameters instead of `config.yml`.
@@ -129,3 +139,5 @@ REQUESTED
 =========
 ...
 ```
+
+By default, the `REQUESTED` section is a pending-review view: once you or one of your configured groups has cast any non-pending vote on a PR, that PR drops out of the default requested list. Use `-ReviewState All` when you want the broader open-review view instead.
