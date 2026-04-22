@@ -21,6 +21,9 @@ param(
     [ValidateSet('Configured', 'Discover')]
     [string]$Mode = 'Configured',
 
+    [ValidateSet('Plain', 'Boxed')]
+    [string]$Display = 'Plain',
+
     [Parameter(ParameterSetName = 'Direct')]
     [object[]]$Groups = @()
 )
@@ -96,10 +99,152 @@ function Format-AzDOReviewStatus {
     "$color$Status$reset"
 }
 
+function ConvertTo-AzDOPlainText {
+    param([AllowNull()][string]$Text)
+
+    if ($null -eq $Text) { return '' }
+
+    $pattern=[regex]::Escape([string][char]27)+'\[[0-9;]*m'
+    [regex]::Replace($Text,$pattern,'')
+}
+
+function Get-AzDOTerminalWidth {
+    try {
+        $width=$Host.UI.RawUI.WindowSize.Width
+
+        if ($width -ge 40) { return [int]$width }
+    } catch {}
+
+    100
+}
+
+function Split-AzDOWrappedText {
+    param(
+        [AllowNull()][string]$Text,
+        [int]$Width
+    )
+
+    if ($Width -lt 8) { return @([string]$Text) }
+
+    $value=[string]$Text
+
+    if ([string]::IsNullOrWhiteSpace($value)) { return @('') }
+
+    $lines=[System.Collections.Generic.List[string]]::new()
+
+    foreach ($paragraph in ($value -split "`r?`n")) {
+        $remaining=$paragraph.Trim()
+
+        if ([string]::IsNullOrEmpty($remaining)) {
+            $lines.Add('') | Out-Null
+            continue
+        }
+
+        while ($remaining.Length -gt $Width) {
+            $breakIndex=$remaining.LastIndexOf(' ', [Math]::Min($Width, $remaining.Length - 1), $Width)
+
+            if ($breakIndex -lt 1) { $breakIndex=$Width }
+
+            $lines.Add($remaining.Substring(0, $breakIndex).TrimEnd()) | Out-Null
+            $remaining=$remaining.Substring($breakIndex).TrimStart()
+        }
+
+        $lines.Add($remaining) | Out-Null
+    }
+
+    $lines.ToArray()
+}
+
+function Format-AzDOBox {
+    param(
+        [string]$Title,
+        [string[]]$Lines,
+        [int]$Width
+    )
+
+    $innerWidth=[Math]::Max(20, $Width - 2)
+    $topLeft=[char]0x250C
+    $topRight=[char]0x2510
+    $bottomLeft=[char]0x2514
+    $bottomRight=[char]0x2518
+    $horizontal=[char]0x2500
+    $vertical=[char]0x2502
+    $label=" $Title "
+    $topFill=[string]$horizontal * [Math]::Max(0, $innerWidth - $label.Length)
+    $top="$topLeft$label$topFill$topRight"
+    $bottom="$bottomLeft$([string]$horizontal * $innerWidth)$bottomRight"
+
+    $body=@(
+        foreach ($line in @($Lines)) {
+            $content=" $line"
+            $plain=ConvertTo-AzDOPlainText $content
+            $padding=' ' * [Math]::Max(0, $innerWidth - $plain.Length)
+            "$vertical$content$padding$vertical"
+        }
+    )
+
+    @($top) + $body + @($bottom) -join [Environment]::NewLine
+}
+
+function Get-AzDOSectionBoxLines {
+    param(
+        [object[]]$Records,
+        [int]$InnerWidth
+    )
+
+    $lines=[System.Collections.Generic.List[string]]::new()
+    $styles=Get-AzDOThemeStyles
+
+    foreach ($record in @($Records)) {
+        $status=[string]$record.ReviewStatus
+        $plainMeta=if ([string]::IsNullOrWhiteSpace($status)) {
+            "$(Format-RelativeTime $record.CreationDate) by $($record.CreatedBy)"
+        } else {
+            "$(Format-RelativeTime $record.CreationDate) by $($record.CreatedBy)"
+        }
+
+        $metaLines=@(Split-AzDOWrappedText -Text $plainMeta -Width $InnerWidth)
+
+        if ($metaLines.Count -gt 0 -and -not [string]::IsNullOrWhiteSpace($status)) {
+            $metaLines[0]="$(Format-AzDOReviewStatus -Status $status) $($styles.Dim)$($metaLines[0])$($styles.Reset)"
+        } elseif ($metaLines.Count -gt 0) {
+            $metaLines[0]="$($styles.Dim)$($metaLines[0])$($styles.Reset)"
+        }
+
+        for ($i=1; $i -lt $metaLines.Count; $i++) {
+            $metaLines[$i]="$($styles.Dim)$($metaLines[$i])$($styles.Reset)"
+        }
+
+        foreach ($line in $metaLines) {
+            $lines.Add($line) | Out-Null
+        }
+
+        foreach ($line in @(Split-AzDOWrappedText -Text "[#$($record.PullRequestId)] $($record.Title)" -Width $InnerWidth)) {
+            $lines.Add("$($styles.Blue)$line$($styles.Reset)") | Out-Null
+        }
+
+        foreach ($line in @(Split-AzDOWrappedText -Text $record.PRUrl -Width $InnerWidth)) {
+            $lines.Add("$($styles.Purple)$($styles.Underline)$line$($styles.Reset)") | Out-Null
+        }
+
+        $lines.Add('') | Out-Null
+    }
+
+    if ($lines.Count -gt 0 -and $lines[$lines.Count - 1] -eq '') {
+        $lines.RemoveAt($lines.Count - 1)
+    }
+
+    $lines.ToArray()
+}
+
 function Format-AzDOOutput {
     param(
         [string]$Section,
-        [object]$Record
+        [object]$Record,
+        [object[]]$Records,
+        [ValidateSet('Plain','Boxed')]
+        [string]$Display='Plain',
+        [int]$Width=100
     )
 
     if ($Section) {
@@ -107,6 +252,12 @@ function Format-AzDOOutput {
             'Created' { 'CREATED' }
             'ReviewRequested' { 'REQUESTED' }
             default { $Section.ToUpperInvariant() }
+        }
+
+        if ($Display -eq 'Boxed') {
+            $boxWidth=[Math]::Max(40, [Math]::Min($Width, 140))
+            $lines=Get-AzDOSectionBoxLines -Records $Records -InnerWidth ($boxWidth - 2)
+            return Format-AzDOBox -Title $title -Lines $lines -Width $boxWidth
         }
 
         $blue="$([char]27)[36m"
@@ -123,23 +274,38 @@ function Format-AzDOOutput {
         ) -join [Environment]::NewLine
     }
 
-    $dim=''
-    $purple="$([char]27)[35m"
-    $underline=''
-    $reset=''
-
-    if ($PSStyle) {
-        $dim=$PSStyle.Dim
-        $underline=$PSStyle.Underline
-        $reset=$PSStyle.Reset
+    if ($Display -eq 'Boxed') {
+        return $null
     }
 
+    $styles=Get-AzDOThemeStyles
+
     @(
-        "$(Format-AzDOReviewStatus -Status $Record.ReviewStatus) $dim$(Format-RelativeTime $Record.CreationDate) by $($Record.CreatedBy)$reset"
-        "[#$($Record.PullRequestId)] $($Record.Title)$reset"
-        "$purple$underline$($Record.PRUrl)$reset"
+        "$(Format-AzDOReviewStatus -Status $Record.ReviewStatus) $($styles.Dim)$(Format-RelativeTime $Record.CreationDate) by $($Record.CreatedBy)$($styles.Reset)"
+        "$($styles.Blue)[#$($Record.PullRequestId)] $($Record.Title)$($styles.Reset)"
+        "$($styles.Purple)$($styles.Underline)$($Record.PRUrl)$($styles.Reset)"
         ''
     ) -join [Environment]::NewLine
+}
+
+function Get-AzDOThemeStyles {
+    $styles=[ordered]@{
+        Dim=''
+        Blue="$([char]27)[36m"
+        Purple="$([char]27)[35m"
+        Underline=''
+        Reset="$([char]27)[0m"
+    }
+
+    if ($PSStyle) {
+        $styles.Dim=$PSStyle.Dim
+        $styles.Blue=$PSStyle.Foreground.Cyan
+        $styles.Purple=$PSStyle.Foreground.Magenta
+        $styles.Underline=$PSStyle.Underline
+        $styles.Reset=$PSStyle.Reset
+    }
+
+    [pscustomobject]$styles
 }
 
 function Get-AzDOComparable {
@@ -786,6 +952,9 @@ function Get-AzDOPulls {
         [ValidateSet('Configured','Discover')]
         [string]$Mode='Configured',
 
+        [ValidateSet('Plain','Boxed')]
+        [string]$Display='Plain',
+
         [Parameter(ParameterSetName='Direct')]
         [object[]]$Groups=@()
     )
@@ -946,15 +1115,28 @@ function Get-AzDOPulls {
         return
     }
 
-    foreach ($section in $(if ($View -eq 'Both') {'Created','ReviewRequested'} else {$View})) {
+    $renderWidth=Get-AzDOTerminalWidth
+
+    $sections=@(if ($View -eq 'Both') {'Created','ReviewRequested'} else {$View})
+
+    for ($sectionIndex=0; $sectionIndex -lt $sections.Count; $sectionIndex++) {
+        $section=$sections[$sectionIndex]
         $sectionRecords=@(@($allResults.ToArray()) | Where-Object {$_.View -eq $section} | Sort-Object CreationDate -Descending)
 
         if ($sectionRecords.Count -eq 0) { continue }
 
-        Write-Output (Format-AzDOOutput -Section $section)
+        if ($Display -eq 'Boxed') {
+            Write-Output (Format-AzDOOutput -Section $section -Records $sectionRecords -Display $Display -Width $renderWidth)
+            if ($sectionIndex -lt ($sections.Count - 1)) {
+                Write-Output ''
+            }
+            continue
+        }
+
+        Write-Output (Format-AzDOOutput -Section $section -Display $Display -Width $renderWidth)
 
         foreach ($record in $sectionRecords) {
-            Write-Output (Format-AzDOOutput -Record $record)
+            Write-Output (Format-AzDOOutput -Record $record -Display $Display -Width $renderWidth)
         }
     }
 }
