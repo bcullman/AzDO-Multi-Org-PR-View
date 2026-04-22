@@ -151,9 +151,9 @@ Settled approvals, declines, and rejects are hidden from the default `REQUESTED`
 
 Requested-review entries include a compact `Review:` label such as:
 - `Draft`
-- `Needs review`
+- `Review Needed`
 - `Waiting for author`
-- `Re-review needed`
+- `Re-review Needed`
 - `Approved`
 - `Approved with suggestions`
 - `Rejected`

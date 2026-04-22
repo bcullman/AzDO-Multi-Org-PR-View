@@ -65,30 +65,15 @@ function Format-AzDOReviewStatus {
 
     $reset="$([char]27)[0m"
     $color=switch ($Status) {
-        'Approved' { "$([char]27)[32m"; break }
-        'Approved with suggestions' { "$([char]27)[32m"; break }
-        'Needs review' { "$([char]27)[33m"; break }
-        'Waiting for author' { "$([char]27)[33m"; break }
-        'Re-review needed' { "$([char]27)[33m"; break }
-        'Draft' { "$([char]27)[33m"; break }
-        'Rejected' { "$([char]27)[31m"; break }
-        'Declined' { "$([char]27)[31m"; break }
+        'Approved'                  { "$([char]27)[38;2;85;163;98m"; break }    # #55A362
+        'Approved with suggestions' { "$([char]27)[38;2;85;163;98m"; break }    # #55A362
+        'Review Needed'             { "$([char]27)[38;2;255;255;255m"; break }  # #FFFFFF
+        'Re-review Needed'          { "$([char]27)[38;2;255;255;255m"; break }  # #FFFFFF
+        'Waiting for author'        { "$([char]27)[38;2;214;118;40m"; break }   # #D67628
+        'Draft'                     { "$([char]27)[38;2;0;90;156m"; break }     # #005A9C
+        'Rejected'                  { "$([char]27)[38;2;205;74;69m"; break }    # #CD4A45
+        'Declined'                  { "$([char]27)[38;2;205;74;69m"; break }    # #CD4A45
         default { $null }
-    }
-
-    if ($PSStyle) {
-        $reset=$PSStyle.Reset
-        $color=switch ($Status) {
-            'Approved' { $PSStyle.Foreground.Green; break }
-            'Approved with suggestions' { $PSStyle.Foreground.Green; break }
-            'Needs review' { $PSStyle.Foreground.Yellow; break }
-            'Waiting for author' { $PSStyle.Foreground.Yellow; break }
-            'Re-review needed' { $PSStyle.Foreground.Yellow; break }
-            'Draft' { $PSStyle.Foreground.Yellow; break }
-            'Rejected' { $PSStyle.Foreground.Red; break }
-            'Declined' { $PSStyle.Foreground.Red; break }
-            default { $null }
-        }
     }
 
     if ($null -eq $color) { return $Status }
@@ -109,13 +94,8 @@ function Format-AzDOOutput {
             default { $Section.ToUpperInvariant() }
         }
 
-        $blue="$([char]27)[36m"
+        $blue="$([char]27)[38;2;0;255;255m" # #00FFFF
         $reset="$([char]27)[0m"
-
-        if ($PSStyle) {
-            $blue=$PSStyle.Foreground.Cyan
-            $reset=$PSStyle.Reset
-        }
 
         return @(
             "$blue$title$reset"
@@ -123,19 +103,13 @@ function Format-AzDOOutput {
         ) -join [Environment]::NewLine
     }
 
-    $dim=''
-    $purple="$([char]27)[35m"
-    $underline=''
-    $reset=''
-
-    if ($PSStyle) {
-        $dim=$PSStyle.Dim
-        $underline=$PSStyle.Underline
-        $reset=$PSStyle.Reset
-    }
+    $dim="$([char]27)[2m"
+    $purple="$([char]27)[38;2;140;107;200m" # #8C6BC8
+    $underline="$([char]27)[4m"
+    $reset="$([char]27)[0m"
 
     @(
-        "$(Format-AzDOReviewStatus -Status $Record.ReviewStatus) $dim$(Format-RelativeTime $Record.CreationDate) by $($Record.CreatedBy)$reset"
+        "$dim$(Format-RelativeTime $Record.CreationDate) by $($Record.CreatedBy)$reset | $(Format-AzDOReviewStatus -Status $Record.ReviewStatus)"
         "[#$($Record.PullRequestId)] $($Record.Title)$reset"
         "$purple$underline$($Record.PRUrl)$reset"
         ''
@@ -444,15 +418,15 @@ function Get-AzDOReviewerStatus {
 
     $status=switch ($vote) {
         { $hasDeclined } { 'Declined'; break }
-        { $_ -eq $null -or $_ -eq 0 } { 'Needs review'; break }
+        { $_ -eq $null -or $_ -eq 0 } { 'Review Needed'; break }
         -5 { 'Waiting for author'; break }
         -10 { 'Rejected'; break }
         5 {
-            if ($isReapprove -or $isFlagged) { 'Re-review needed' } else { 'Approved with suggestions' }
+            if ($isReapprove -or $isFlagged) { 'Re-review Needed' } else { 'Approved with suggestions' }
             break
         }
         10 {
-            if ($isReapprove -or $isFlagged) { 'Re-review needed' } else { 'Approved' }
+            if ($isReapprove -or $isFlagged) { 'Re-review Needed' } else { 'Approved' }
             break
         }
         default { "Vote $vote" }
@@ -461,7 +435,7 @@ function Get-AzDOReviewerStatus {
     [pscustomobject]@{
         Status = $status;
         Vote = $vote;
-        IsActionable = $status -in @('Needs review','Waiting for author','Re-review needed')
+        IsActionable = $status -in @('Review Needed','Waiting for author','Re-review Needed')
     }
 }
 
@@ -499,9 +473,9 @@ function Get-AzDOPullRequestReviewStatus {
 
     $aggregate=switch ($true) {
         { $statusNames -contains 'Rejected' } { 'Rejected'; break }
-        { $statusNames -contains 'Re-review needed' } { 'Re-review needed'; break }
+        { $statusNames -contains 'Re-review Needed' } { 'Re-review Needed'; break }
         { $statusNames -contains 'Waiting for author' } { 'Waiting for author'; break }
-        { $statusNames -contains 'Needs review' } { 'Needs review'; break }
+        { $statusNames -contains 'Review Needed' } { 'Review Needed'; break }
         { $statusNames -contains 'Approved with suggestions' } { 'Approved with suggestions'; break }
         { $statusNames -contains 'Approved' } { 'Approved'; break }
         { $statusNames -contains 'Declined' } { 'Declined'; break }
