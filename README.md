@@ -7,6 +7,7 @@ The first tool in the repo is `PR-ospector.ps1`, a cross-organization pull reque
 - What PRs are waiting on me?
 - What PRs are waiting on one of my reviewer groups?
 - Which requested reviews still need action versus ones I've already handled?
+- Why is a requested-review PR still showing up?
 
 By default, it reads `config.yml` and only scans the projects you list there.
 
@@ -17,6 +18,7 @@ It is aimed at people who:
 - work across multiple Azure DevOps organizations
 - need a single view of created and requested-review PRs
 - want the default requested-review list to stay focused on actionable review requests
+- want the dashboard to explain whether a PR needs review, is waiting on the author, or needs re-review
 - want a lightweight script instead of opening each org and project manually
 
 ## Current Tools
@@ -112,7 +114,7 @@ Useful options:
 - `-View Created` to show only PRs created by the authenticated user
 - `-View ReviewRequested` to show only PRs where review is requested from the authenticated user or configured groups
 - `-ReviewState Pending` to keep requested-review results limited to actionable review requests; this is the default
-- `-ReviewState All` to include all open requested-review PRs, even if you or a configured group already voted on them
+- `-ReviewState All` to include all open requested-review PRs and label their current review status
 
 Direct usage without config is also supported:
 
@@ -140,4 +142,19 @@ REQUESTED
 ...
 ```
 
-By default, the `REQUESTED` section is a pending-review view: once you or one of your configured groups has cast any non-pending vote on a PR, that PR drops out of the default requested list. Use `-ReviewState All` when you want the broader open-review view instead.
+By default, the `REQUESTED` section is an actionable review view. It keeps PRs visible when they:
+- still need a review vote
+- are in `Waiting for author`
+- need re-review after new commits, when Azure DevOps marks the reviewer entry accordingly
+
+Settled approvals, declines, and rejects are hidden from the default `REQUESTED` view. Use `-ReviewState All` when you want the broader open-review view instead.
+
+Requested-review entries include a compact `Review:` label such as:
+- `Draft`
+- `Needs review`
+- `Waiting for author`
+- `Re-review needed`
+- `Approved`
+- `Approved with suggestions`
+- `Rejected`
+- `Declined`
