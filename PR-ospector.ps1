@@ -325,10 +325,7 @@ function New-AzDORecord {
         [string]$OrganizationName,
         [string]$ProjectName,
         [object]$PullRequest,
-        [string]$View,
-        [string]$MatchedUser,
-        [string]$MatchedGroup,
-        [string]$Reviewer
+        [string]$View
     )
 
     $repo=[Uri]::EscapeDataString($PullRequest.repository.name)
@@ -456,8 +453,7 @@ function Get-AzDOPullRequestReviewStatus {
         }
     }
 
-    $statuses=@($reviewers | ForEach-Object { Get-AzDOReviewerStatus -Reviewer $_ })
-    $statusNames=@($statuses.Status)
+    $statusNames=@($reviewers | ForEach-Object { (Get-AzDOReviewerStatus -Reviewer $_).Status })
 
     $aggregate=switch ($true) {
         { $statusNames -contains 'Rejected' } { 'Rejected'; break }
@@ -489,7 +485,7 @@ function Get-AzDOCreatedRecords {
     $uri="https://dev.azure.com/$OrganizationName/$([Uri]::EscapeDataString($ProjectName))/_apis/git/pullrequests?searchCriteria.status=$([Uri]::EscapeDataString($Status))&api-version=7.1&searchCriteria.creatorId=$([Uri]::EscapeDataString($AuthenticatedUser.Id))"
 
     foreach ($pr in @((Invoke-AzDOGet -Uri $uri -Headers $Headers).value)) {
-        $record=New-AzDORecord -OrganizationName $OrganizationName -ProjectName $ProjectName -PullRequest $pr -View 'Created' -MatchedUser $AuthenticatedUser.Name
+        $record=New-AzDORecord -OrganizationName $OrganizationName -ProjectName $ProjectName -PullRequest $pr -View 'Created'
         $reviewStatus=Get-AzDOPullRequestReviewStatus -PullRequest $pr -AuthenticatedUser $AuthenticatedUser
         $record.ReviewStatus=$reviewStatus.Status
         $record.ReviewerVote=$reviewStatus.Vote
@@ -566,10 +562,7 @@ function Get-AzDORequestedReviewRecords {
                 -OrganizationName $OrganizationName `
                 -ProjectName $ProjectName `
                 -PullRequest $pr `
-                -View 'ReviewRequested' `
-                -MatchedUser $(if ($target.Kind -eq 'User') {$target.Name} else {$null}) `
-                -MatchedGroup $(if ($target.Kind -eq 'Group') {$target.Name} else {$null}) `
-                -Reviewer $(if ($matched -and $matched.displayName) {$matched.displayName} else {$target.Name})
+                -View 'ReviewRequested'
 
             $record.ReviewStatus=$reviewStatus.Status
             $record.ReviewerVote=$reviewStatus.Vote
