@@ -336,24 +336,12 @@ function New-AzDORecord {
     $url="https://dev.azure.com/$OrganizationName/$projectPath/_git/$repo/pullrequest/$($PullRequest.pullRequestId)"
 
     [pscustomobject]@{
-        OrganizationName=$OrganizationName;
-        ProjectName=$ProjectName;
-        RepositoryName=$PullRequest.repository.name;
         PullRequestId=$PullRequest.pullRequestId;
         Title=$PullRequest.title;
-        Status=$PullRequest.status;
         CreatedBy=$PullRequest.createdBy.displayName;
         CreationDate=if ($PullRequest.creationDate) {[datetime]$PullRequest.creationDate} else {$null};
-        Url=$url;
         PRUrl=$url;
-        ApiUrl=$PullRequest.url;
-        SourceBranch=$PullRequest.sourceRefName;
-        TargetBranch=$PullRequest.targetRefName;
         View=$View;
-        MatchedUser=$MatchedUser;
-        MatchedGroup=$MatchedGroup;
-        Mention=$null;
-        Reviewer=$Reviewer;
         ReviewStatus=$null;
         ReviewerVote=$null
     }
