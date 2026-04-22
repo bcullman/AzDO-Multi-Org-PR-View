@@ -58,6 +58,44 @@ function Format-RelativeTime {
     "$([math]::Floor($span.TotalDays/365))y ago"
 }
 
+function Format-AzDOReviewStatus {
+    param([AllowNull()][string]$Status)
+
+    if ([string]::IsNullOrWhiteSpace($Status)) { return $Status }
+
+    $reset="$([char]27)[0m"
+    $color=switch ($Status) {
+        'Approved' { "$([char]27)[32m"; break }
+        'Approved with suggestions' { "$([char]27)[32m"; break }
+        'Needs review' { "$([char]27)[33m"; break }
+        'Waiting for author' { "$([char]27)[33m"; break }
+        'Re-review needed' { "$([char]27)[33m"; break }
+        'Draft' { "$([char]27)[33m"; break }
+        'Rejected' { "$([char]27)[31m"; break }
+        'Declined' { "$([char]27)[31m"; break }
+        default { $null }
+    }
+
+    if ($PSStyle) {
+        $reset=$PSStyle.Reset
+        $color=switch ($Status) {
+            'Approved' { $PSStyle.Foreground.Green; break }
+            'Approved with suggestions' { $PSStyle.Foreground.Green; break }
+            'Needs review' { $PSStyle.Foreground.Yellow; break }
+            'Waiting for author' { $PSStyle.Foreground.Yellow; break }
+            'Re-review needed' { $PSStyle.Foreground.Yellow; break }
+            'Draft' { $PSStyle.Foreground.Yellow; break }
+            'Rejected' { $PSStyle.Foreground.Red; break }
+            'Declined' { $PSStyle.Foreground.Red; break }
+            default { $null }
+        }
+    }
+
+    if ($null -eq $color) { return $Status }
+
+    "$color$Status$reset"
+}
+
 function Format-AzDOOutput {
     param(
         [string]$Section,
@@ -97,7 +135,7 @@ function Format-AzDOOutput {
     }
 
     @(
-        "$dim$(Format-RelativeTime $Record.CreationDate) by $($Record.CreatedBy) | Status: $($Record.ReviewStatus) $reset"
+        "$(Format-AzDOReviewStatus -Status $Record.ReviewStatus) $dim$(Format-RelativeTime $Record.CreationDate) by $($Record.CreatedBy)$reset"
         "[#$($Record.PullRequestId)] $($Record.Title)$reset"
         "$purple$underline$($Record.PRUrl)$reset"
         ''
