@@ -58,6 +58,29 @@ function Format-RelativeTime {
     "$([math]::Floor($span.TotalDays/365))y ago"
 }
 
+function Format-AzDOReviewStatus {
+    param([AllowNull()][string]$Status)
+
+    if ([string]::IsNullOrWhiteSpace($Status)) { return $Status }
+
+    $reset="$([char]27)[0m"
+    $color=switch ($Status) {
+        'Approved'                  { "$([char]27)[38;2;85;163;98m"; break }    # #55A362
+        'Approved with suggestions' { "$([char]27)[38;2;85;163;98m"; break }    # #55A362
+        'Review Needed'             { "$([char]27)[38;2;255;255;255m"; break }  # #FFFFFF
+        'Re-review Needed'          { "$([char]27)[38;2;255;255;255m"; break }  # #FFFFFF
+        'Waiting for author'        { "$([char]27)[38;2;214;118;40m"; break }   # #D67628
+        'Draft'                     { "$([char]27)[38;2;0;90;156m"; break }     # #005A9C
+        'Rejected'                  { "$([char]27)[38;2;205;74;69m"; break }    # #CD4A45
+        'Declined'                  { "$([char]27)[38;2;205;74;69m"; break }    # #CD4A45
+        default { $null }
+    }
+
+    if ($null -eq $color) { return $Status }
+
+    "$color$Status$reset"
+}
+
 function Format-AzDOOutput {
     param(
         [string]$Section,
@@ -71,13 +94,8 @@ function Format-AzDOOutput {
             default { $Section.ToUpperInvariant() }
         }
 
-        $blue="$([char]27)[36m"
+        $blue="$([char]27)[38;2;0;255;255m" # #00FFFF
         $reset="$([char]27)[0m"
-
-        if ($PSStyle) {
-            $blue=$PSStyle.Foreground.Cyan
-            $reset=$PSStyle.Reset
-        }
 
         return @(
             "$blue$title$reset"
@@ -85,19 +103,13 @@ function Format-AzDOOutput {
         ) -join [Environment]::NewLine
     }
 
-    $dim=''
-    $purple="$([char]27)[35m"
-    $underline=''
-    $reset=''
-
-    if ($PSStyle) {
-        $dim=$PSStyle.Dim
-        $underline=$PSStyle.Underline
-        $reset=$PSStyle.Reset
-    }
+    $dim="$([char]27)[2m"
+    $purple="$([char]27)[38;2;140;107;200m" # #8C6BC8
+    $underline="$([char]27)[4m"
+    $reset="$([char]27)[0m"
 
     @(
-        "$dim$(Format-RelativeTime $Record.CreationDate) by $($Record.CreatedBy) $reset"
+        "$dim$(Format-RelativeTime $Record.CreationDate) by $($Record.CreatedBy)$reset | $(Format-AzDOReviewStatus -Status $Record.ReviewStatus)"
         "[#$($Record.PullRequestId)] $($Record.Title)$reset"
         "$purple$underline$($Record.PRUrl)$reset"
         ''
@@ -313,10 +325,7 @@ function New-AzDORecord {
         [string]$OrganizationName,
         [string]$ProjectName,
         [object]$PullRequest,
-        [string]$View,
-        [string]$MatchedUser,
-        [string]$MatchedGroup,
-        [string]$Reviewer
+        [string]$View
     )
 
     $repo=[Uri]::EscapeDataString($PullRequest.repository.name)
@@ -324,24 +333,14 @@ function New-AzDORecord {
     $url="https://dev.azure.com/$OrganizationName/$projectPath/_git/$repo/pullrequest/$($PullRequest.pullRequestId)"
 
     [pscustomobject]@{
-        OrganizationName=$OrganizationName;
-        ProjectName=$ProjectName;
-        RepositoryName=$PullRequest.repository.name;
         PullRequestId=$PullRequest.pullRequestId;
         Title=$PullRequest.title;
-        Status=$PullRequest.status;
         CreatedBy=$PullRequest.createdBy.displayName;
         CreationDate=if ($PullRequest.creationDate) {[datetime]$PullRequest.creationDate} else {$null};
-        Url=$url;
         PRUrl=$url;
-        ApiUrl=$PullRequest.url;
-        SourceBranch=$PullRequest.sourceRefName;
-        TargetBranch=$PullRequest.targetRefName;
         View=$View;
-        MatchedUser=$MatchedUser;
-        MatchedGroup=$MatchedGroup;
-        Mention=$null;
-        Reviewer=$Reviewer
+        ReviewStatus=$null;
+        ReviewerVote=$null
     }
 }
 
@@ -379,16 +378,98 @@ function Get-AzDOReviewerVote {
     $votes[0]
 }
 
-function Test-AzDOReviewerIsPending {
+function Get-AzDOReviewerStatus {
     param([object]$Reviewer)
 
-    if ($null -eq $Reviewer) { return $false }
-
-    if ($Reviewer.hasDeclined -eq $true) { return $false }
+    if ($null -eq $Reviewer) {
+        return [pscustomobject]@{
+            Status = 'Unknown';
+            Vote = $null;
+            IsActionable = $false
+        }
+    }
 
     $vote=Get-AzDOReviewerVote -Reviewer $Reviewer
+    $candidates=@($Reviewer) + @($Reviewer.votedFor)
+    $hasDeclined=$false
+    $isFlagged=$false
+    $isReapprove=$false
 
-    $null -eq $vote -or $vote -eq 0
+    foreach ($candidate in @($candidates | Where-Object { $null -ne $_ })) {
+        if ($candidate.hasDeclined -eq $true) { $hasDeclined=$true }
+        if ($candidate.isFlagged -eq $true) { $isFlagged=$true }
+        if ($candidate.isReapprove -eq $true) { $isReapprove=$true }
+    }
+
+    $status=switch ($vote) {
+        { $hasDeclined } { 'Declined'; break }
+        { $_ -eq $null -or $_ -eq 0 } { 'Review Needed'; break }
+        -5 { 'Waiting for author'; break }
+        -10 { 'Rejected'; break }
+        5 {
+            if ($isReapprove -or $isFlagged) { 'Re-review Needed' } else { 'Approved with suggestions' }
+            break
+        }
+        10 {
+            if ($isReapprove -or $isFlagged) { 'Re-review Needed' } else { 'Approved' }
+            break
+        }
+        default { "Vote $vote" }
+    }
+
+    [pscustomobject]@{
+        Status = $status;
+        Vote = $vote;
+        IsActionable = $status -in @('Review Needed','Waiting for author','Re-review Needed')
+    }
+}
+
+function Get-AzDOPullRequestReviewStatus {
+    param(
+        [object]$PullRequest,
+        [object]$AuthenticatedUser
+    )
+
+    if ($PullRequest.isDraft -eq $true) {
+        return [pscustomobject]@{
+            Status = 'Draft';
+            Vote = $null
+        }
+    }
+
+    $reviewers=@(
+        @($PullRequest.reviewers) |
+            Where-Object {
+                $_ -and
+                $_.id -and
+                (-not $AuthenticatedUser.Id -or [string]$_.id -ne [string]$AuthenticatedUser.Id)
+            }
+    )
+
+    if ($reviewers.Count -eq 0) {
+        return [pscustomobject]@{
+            Status = 'No reviewers';
+            Vote = $null
+        }
+    }
+
+    $statusNames=@($reviewers | ForEach-Object { (Get-AzDOReviewerStatus -Reviewer $_).Status })
+
+    $aggregate=switch ($true) {
+        { $statusNames -contains 'Rejected' } { 'Rejected'; break }
+        { $statusNames -contains 'Re-review Needed' } { 'Re-review Needed'; break }
+        { $statusNames -contains 'Waiting for author' } { 'Waiting for author'; break }
+        { $statusNames -contains 'Review Needed' } { 'Review Needed'; break }
+        { $statusNames -contains 'Approved with suggestions' } { 'Approved with suggestions'; break }
+        { $statusNames -contains 'Approved' } { 'Approved'; break }
+        { $statusNames -contains 'Declined' } { 'Declined'; break }
+        default { ($statusNames | Select-Object -First 1) }
+    }
+
+    [pscustomobject]@{
+        Status = $aggregate;
+        Vote = $null
+    }
 }
 
 function Get-AzDOCreatedRecords {
@@ -404,9 +485,11 @@ function Get-AzDOCreatedRecords {
     $uri="https://dev.azure.com/$OrganizationName/$([Uri]::EscapeDataString($ProjectName))/_apis/git/pullrequests?searchCriteria.status=$([Uri]::EscapeDataString($Status))&api-version=7.1&searchCriteria.creatorId=$([Uri]::EscapeDataString($AuthenticatedUser.Id))"
 
     foreach ($pr in @((Invoke-AzDOGet -Uri $uri -Headers $Headers).value)) {
-        $results.Add(
-            (New-AzDORecord -OrganizationName $OrganizationName -ProjectName $ProjectName -PullRequest $pr -View 'Created' -MatchedUser $AuthenticatedUser.Name)
-        ) | Out-Null
+        $record=New-AzDORecord -OrganizationName $OrganizationName -ProjectName $ProjectName -PullRequest $pr -View 'Created'
+        $reviewStatus=Get-AzDOPullRequestReviewStatus -PullRequest $pr -AuthenticatedUser $AuthenticatedUser
+        $record.ReviewStatus=$reviewStatus.Status
+        $record.ReviewerVote=$reviewStatus.Vote
+        $results.Add($record) | Out-Null
     }
 
     $results.ToArray()
@@ -459,20 +542,31 @@ function Get-AzDORequestedReviewRecords {
 
             if (-not $matched) { continue }
 
-            if ($ReviewState -eq 'Pending' -and -not (Test-AzDOReviewerIsPending -Reviewer $matched)) {
+            $reviewStatus=Get-AzDOReviewerStatus -Reviewer $matched
+
+            if ($pr.isDraft -eq $true) {
+                $reviewStatus=[pscustomobject]@{
+                    Status = 'Draft';
+                    Vote = $null;
+                    IsActionable = $true
+                }
+            }
+
+            if ($ReviewState -eq 'Pending' -and -not $reviewStatus.IsActionable) {
                 continue
             }
 
             if ($results.ContainsKey($pr.pullRequestId)) { continue }
 
-            $results[$pr.pullRequestId]=New-AzDORecord `
+            $record=New-AzDORecord `
                 -OrganizationName $OrganizationName `
                 -ProjectName $ProjectName `
                 -PullRequest $pr `
-                -View 'ReviewRequested' `
-                -MatchedUser $(if ($target.Kind -eq 'User') {$target.Name} else {$null}) `
-                -MatchedGroup $(if ($target.Kind -eq 'Group') {$target.Name} else {$null}) `
-                -Reviewer $(if ($matched -and $matched.displayName) {$matched.displayName} else {$target.Name})
+                -View 'ReviewRequested'
+
+            $record.ReviewStatus=$reviewStatus.Status
+            $record.ReviewerVote=$reviewStatus.Vote
+            $results[$pr.pullRequestId]=$record
         }
     }
 
