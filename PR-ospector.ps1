@@ -21,6 +21,12 @@ param(
     [ValidateSet('Configured', 'Discover')]
     [string]$Mode = 'Configured',
 
+    [switch]$Watch,
+
+    [int]$RefreshSeconds,
+
+    [string]$RefreshKey,
+
     [Parameter(ParameterSetName = 'Direct')]
     [object[]]$Groups = @()
 )
@@ -58,27 +64,44 @@ function Format-RelativeTime {
     "$([math]::Floor($span.TotalDays/365))y ago"
 }
 
+function Get-AzDOStyle {
+    $esc=[char]27
+
+    [pscustomobject]@{
+        Reset="$esc[0m";
+        Dim="$esc[2m";
+        ClearLine="$esc[0K";
+        Cyan="$esc[38;2;0;255;255m";       # #00FFFF
+        Purple="$esc[38;2;140;107;200m";   # #8C6BC8
+        White="$esc[38;2;255;255;255m";    # #FFFFFF
+        Green="$esc[38;2;85;163;98m";      # #55A362
+        Orange="$esc[38;2;214;118;40m";    # #D67628
+        Blue="$esc[38;2;0;90;156m";        # #005A9C
+        Red="$esc[38;2;205;74;69m";        # #CD4A45
+    }
+}
+
 function Format-AzDOReviewStatus {
     param([AllowNull()][string]$Status)
 
     if ([string]::IsNullOrWhiteSpace($Status)) { return $Status }
 
-    $reset="$([char]27)[0m"
+    $style=Get-AzDOStyle
     $color=switch ($Status) {
-        'Approved'                  { "$([char]27)[38;2;85;163;98m"; break }    # #55A362
-        'Approved with suggestions' { "$([char]27)[38;2;85;163;98m"; break }    # #55A362
-        'Review Needed'             { "$([char]27)[38;2;255;255;255m"; break }  # #FFFFFF
-        'Re-review Needed'          { "$([char]27)[38;2;255;255;255m"; break }  # #FFFFFF
-        'Waiting for author'        { "$([char]27)[38;2;214;118;40m"; break }   # #D67628
-        'Draft'                     { "$([char]27)[38;2;0;90;156m"; break }     # #005A9C
-        'Rejected'                  { "$([char]27)[38;2;205;74;69m"; break }    # #CD4A45
-        'Declined'                  { "$([char]27)[38;2;205;74;69m"; break }    # #CD4A45
+        'Approved'                  { $style.Green; break }
+        'Approved with suggestions' { $style.Green; break }
+        'Review Needed'             { $style.White; break }
+        'Re-review Needed'          { $style.White; break }
+        'Waiting for author'        { $style.Orange; break }
+        'Draft'                     { $style.Blue; break }
+        'Rejected'                  { $style.Red; break }
+        'Declined'                  { $style.Red; break }
         default { $null }
     }
 
     if ($null -eq $color) { return $Status }
 
-    "$color$Status$reset"
+    "$color$Status$($style.Reset)"
 }
 
 function Format-AzDOOutput {
@@ -94,26 +117,29 @@ function Format-AzDOOutput {
             default { $Section.ToUpperInvariant() }
         }
 
-        $blue="$([char]27)[38;2;0;255;255m" # #00FFFF
-        $reset="$([char]27)[0m"
+        $style=Get-AzDOStyle
 
         return @(
-            "$blue$title$reset"
-            "$blue$('='*$title.Length)$reset"
+            "$($style.Cyan)$title$($style.Reset)"
+            "$($style.Cyan)$('='*$title.Length)$($style.Reset)"
         ) -join [Environment]::NewLine
     }
 
-    $dim="$([char]27)[2m"
-    $purple="$([char]27)[38;2;140;107;200m" # #8C6BC8
-    $underline="$([char]27)[4m"
-    $reset="$([char]27)[0m"
+    $style=Get-AzDOStyle
+    $width=[math]::Max(1, (Get-AzDOConsoleWidth)-1)
+    $urlLines=@(
+        for ($i=0; $i -lt $Record.PRUrl.Length; $i+=$width) {
+            $length=[math]::Min($width, $Record.PRUrl.Length-$i)
+            "$($style.Purple)$($Record.PRUrl.Substring($i, $length))$($style.Reset)$($style.ClearLine)"
+        }
+    )
 
-    @(
-        "$dim$(Format-RelativeTime $Record.CreationDate) by $($Record.CreatedBy)$reset | $(Format-AzDOReviewStatus -Status $Record.ReviewStatus)"
-        "[#$($Record.PullRequestId)] $($Record.Title)$reset"
-        "$purple$underline$($Record.PRUrl)$reset"
+    (@(
+        "$($style.Dim)$(Format-RelativeTime $Record.CreationDate) by $($Record.CreatedBy)$($style.Reset) | $(Format-AzDOReviewStatus -Status $Record.ReviewStatus)$($style.Reset)$($style.ClearLine)"
+        "[#$($Record.PullRequestId)] $($Record.Title)$($style.Reset)$($style.ClearLine)"
+        $urlLines
         ''
-    ) -join [Environment]::NewLine
+    ) | ForEach-Object { $_ }) -join [Environment]::NewLine
 }
 
 function Get-AzDOComparable {
@@ -152,33 +178,14 @@ function Get-AzDOIdentityPropertyValue {
     $requestedValueProperty.Value
 }
 
-function Get-AzDOConfigCollection {
-    param(
-        [string]$ConfigPath,
-        [string]$Org,
-        [string]$Pat,
-        [object[]]$Groups,
-        [bool]$IsDirect
-    )
-
-    if ($IsDirect) {
-        return @(
-            [pscustomobject]@{
-                Name = $Org;
-                Pat = $Pat;
-                Enabled = $true;
-                Groups = @(@($Groups) | Where-Object {-not [string]::IsNullOrWhiteSpace([string]$_)});
-                Projects = @();
-                FromConfig = $false
-            }
-        )
-    }
+function Read-AzDOConfig {
+    param([string]$ConfigPath)
 
     if (-not (Test-Path -LiteralPath $ConfigPath)) { throw "Config file '$ConfigPath' does not exist." }
 
     $ext=[IO.Path]::GetExtension($ConfigPath).ToLowerInvariant()
 
-    $parsed=switch($ext) {
+    switch($ext) {
         '.json' {
             Get-Content -LiteralPath $ConfigPath -Raw | ConvertFrom-Json -Depth 100
             break
@@ -202,6 +209,54 @@ function Get-AzDOConfigCollection {
             throw "Unsupported config file extension '$ext'. Supported extensions are .json, .psd1, .yml, and .yaml."
         }
     }
+}
+
+function Get-AzDOObjectPropertyValue {
+    param(
+        [AllowNull()][object]$InputObject,
+        [string]$PropertyName
+    )
+
+    if ($null -eq $InputObject) { return $null }
+
+    if ($InputObject -is [System.Collections.IDictionary]) {
+        if ($InputObject.Contains($PropertyName)) {
+            return $InputObject[$PropertyName]
+        }
+
+        return $null
+    }
+
+    $property=$InputObject.PSObject.Properties[$PropertyName]
+
+    if ($null -eq $property) { return $null }
+
+    $property.Value
+}
+
+function Get-AzDOConfigCollection {
+    param(
+        [string]$ConfigPath,
+        [string]$Org,
+        [string]$Pat,
+        [object[]]$Groups,
+        [bool]$IsDirect
+    )
+
+    if ($IsDirect) {
+        return @(
+            [pscustomobject]@{
+                Name = $Org;
+                Pat = $Pat;
+                Enabled = $true;
+                Groups = @(@($Groups) | Where-Object {-not [string]::IsNullOrWhiteSpace([string]$_)});
+                Projects = @();
+                FromConfig = $false
+            }
+        )
+    }
+
+    $parsed=Read-AzDOConfig -ConfigPath $ConfigPath
 
     $orgs=if ($parsed.organizations) {
         @($parsed.organizations)
@@ -223,6 +278,259 @@ function Get-AzDOConfigCollection {
             }
         }
     )
+}
+
+function Resolve-AzDOConsoleKey {
+    param(
+        [object]$KeySpec,
+        [string]$SettingName
+    )
+
+    $text=[string]$KeySpec
+
+    if ([string]::IsNullOrWhiteSpace($text)) {
+        throw "$SettingName must be a non-empty key name or single character."
+    }
+
+    $text=$text.Trim()
+
+    if ($text.Length -eq 1) {
+        $char=[char]$text
+
+        if ([char]::IsLetter($char)) { return [System.ConsoleKey](([string]$char).ToUpperInvariant()) }
+        if ([char]::IsDigit($char)) { return [System.ConsoleKey]("D$char") }
+        if ($char -eq ' ') { return [System.ConsoleKey]::Spacebar }
+    }
+
+    try {
+        return [System.ConsoleKey][Enum]::Parse([System.ConsoleKey], $text, $true)
+    } catch {
+        throw "$SettingName value '$text' is not a supported console key. Use a single letter, digit, or ConsoleKey name such as F5 or Spacebar."
+    }
+}
+
+function Get-AzDOConsoleWidth {
+    try {
+        if ([Console]::WindowWidth -gt 0) {
+            return [Console]::WindowWidth
+        }
+    } catch {
+    }
+
+    120
+}
+
+function Write-AzDOWatchHeader {
+    param(
+        [datetime]$LastRefresh,
+        [datetime]$NextRefresh,
+        [string]$RefreshKeyDisplay
+    )
+
+    $now=Get-Date
+    $remaining=[int][math]::Ceiling(($NextRefresh-$now).TotalSeconds)
+    $width=Get-AzDOConsoleWidth
+    $style=Get-AzDOStyle
+    $remainingSpan=[TimeSpan]::FromSeconds([math]::Max(0, $remaining))
+    $lastRefreshText=$LastRefresh.ToString('ddd, MMMM d, yyyy h:mm:ss tt')
+    $remainingText=if ($remainingSpan.TotalHours -ge 1) { $remainingSpan.ToString('hh\:mm\:ss') } else { $remainingSpan.ToString('mm\:ss') }
+
+    $drawableWidth=[math]::Max(1, $width-1)
+    $segments=@(
+        @{ Text='PR-ospector'; Color=$style.Cyan }
+        @{ Text=' | pulled: '; Color=$style.Dim }
+        @{ Text=$lastRefreshText; Color=$style.White }
+        @{ Text=' next: '; Color=$style.Dim }
+        @{ Text=$remainingText; Color=$style.Cyan }
+        @{ Text=' | refresh: '; Color=$style.Dim }
+        @{ Text=$RefreshKeyDisplay; Color=$style.Purple }
+        @{ Text=' quit: '; Color=$style.Dim }
+        @{ Text='q'; Color=$style.Purple }
+    )
+    $lines=@('', '')
+    $row=0
+    $remainingWidth=$drawableWidth
+
+    foreach ($segment in $segments) {
+        $text=[string]$segment.Text
+        $offset=0
+
+        while ($offset -lt $text.Length -and $row -lt $lines.Count) {
+            if ($remainingWidth -le 0) {
+                $row++
+                $remainingWidth=$drawableWidth
+                continue
+            }
+
+            $length=[math]::Min($remainingWidth, $text.Length-$offset)
+            $visibleText=$text.Substring($offset, $length)
+            $lines[$row]="$($lines[$row])$($segment.Color)$visibleText$($style.Reset)"
+            $offset+=$length
+            $remainingWidth-=$length
+        }
+
+        if ($row -ge $lines.Count) { break }
+    }
+
+    $firstLine="$($style.Reset)$($lines[0])$($style.Reset)$($style.ClearLine)"
+    $secondLine="$($style.Reset)$($lines[1])$($style.Reset)$($style.ClearLine)"
+
+    try {
+        $left=[Console]::CursorLeft
+        $top=[Console]::CursorTop
+        [Console]::SetCursorPosition(0, 0)
+        [Console]::Write($firstLine)
+        [Console]::SetCursorPosition(0, 1)
+        [Console]::Write($secondLine)
+        $left=[math]::Min($left, [math]::Max(0, [Console]::BufferWidth-1))
+        $top=[math]::Min($top, [math]::Max(0, [Console]::BufferHeight-1))
+        [Console]::SetCursorPosition($left, $top)
+    } catch {
+    }
+}
+
+function Invoke-AzDOWatch {
+    [CmdletBinding(DefaultParameterSetName='ConfigPath')]
+    param(
+        [Parameter(ParameterSetName='ConfigPath')]
+        [string]$ConfigPath,
+
+        [Parameter(Mandatory=$true,ParameterSetName='Direct')]
+        [string]$Org,
+
+        [Parameter(ParameterSetName='Direct')]
+        [string]$Pat,
+
+        [ValidateSet('Created','ReviewRequested','Both')]
+        [string]$View='Both',
+
+        [ValidateSet('active','completed','abandoned','all')]
+        [string]$Status='active',
+
+        [ValidateSet('Pending','All')]
+        [string]$ReviewState='Pending',
+
+        [ValidateSet('Configured','Discover')]
+        [string]$Mode='Configured',
+
+        [int]$RefreshSeconds,
+
+        [string]$RefreshKey,
+
+        [Parameter(ParameterSetName='Direct')]
+        [object[]]$Groups=@()
+    )
+
+    if ($Mode -eq 'Discover') {
+        throw "Watch mode does not support -Mode Discover because Discover can update YAML config. Run Discover as a one-shot command first."
+    }
+
+    if ([Console]::IsInputRedirected -or [Console]::IsOutputRedirected) {
+        throw "Watch mode requires an interactive console because it reads keys and updates the countdown in place."
+    }
+
+    if ($PSCmdlet.ParameterSetName -eq 'ConfigPath' -and [string]::IsNullOrWhiteSpace($ConfigPath)) {
+        $ConfigPath = $script:ConfigPath
+    }
+
+    if ($PSBoundParameters.ContainsKey('RefreshSeconds') -and $RefreshSeconds -le 0) {
+        throw "-RefreshSeconds must be a positive integer."
+    }
+
+    if ($PSBoundParameters.ContainsKey('RefreshKey') -and [string]::IsNullOrWhiteSpace($RefreshKey)) {
+        throw "-RefreshKey must be a non-empty key name or single character."
+    }
+
+    $refreshSecondsValue=600
+    $refreshKeyValue='r'
+
+    if ($PSCmdlet.ParameterSetName -ne 'Direct') {
+        $watchConfig=Get-AzDOObjectPropertyValue -InputObject (Read-AzDOConfig -ConfigPath $ConfigPath) -PropertyName 'watch'
+
+        if ($null -ne $watchConfig) {
+            $configuredSeconds=Get-AzDOObjectPropertyValue -InputObject $watchConfig -PropertyName 'refreshSeconds'
+            $configuredKey=Get-AzDOObjectPropertyValue -InputObject $watchConfig -PropertyName 'refreshKey'
+
+            if ($null -ne $configuredSeconds) {
+                try { $refreshSecondsValue=[int]$configuredSeconds } catch { throw "watch.refreshSeconds must be a positive integer." }
+            }
+
+            if ($null -ne $configuredKey) { $refreshKeyValue=[string]$configuredKey }
+        }
+    }
+
+    if ($RefreshSeconds -gt 0) { $refreshSecondsValue=$RefreshSeconds }
+    if (-not [string]::IsNullOrWhiteSpace($RefreshKey)) { $refreshKeyValue=$RefreshKey }
+    if ($refreshSecondsValue -le 0) { throw "watch.refreshSeconds must be a positive integer." }
+
+    $refreshKeyValue=[string]$refreshKeyValue
+    $refreshKeyResolved=Resolve-AzDOConsoleKey -KeySpec $refreshKeyValue -SettingName 'watch.refreshKey'
+
+    $pullParameters=@{}
+
+    foreach ($entry in $PSBoundParameters.GetEnumerator()) {
+        if ($entry.Key -notin 'RefreshSeconds','RefreshKey') { $pullParameters[$entry.Key]=$entry.Value }
+    }
+
+    if ($PSCmdlet.ParameterSetName -eq 'ConfigPath') { $pullParameters.ConfigPath=$ConfigPath }
+
+    $cursorVisibility=$null
+    $windowTitle=$null
+
+    try {
+        try {
+            $cursorVisibility=[Console]::CursorVisible
+            [Console]::CursorVisible=$false
+        } catch {
+        }
+
+        try {
+            $windowTitle=$Host.UI.RawUI.WindowTitle
+            $Host.UI.RawUI.WindowTitle='PR-ospector'
+        } catch {
+        }
+
+        while ($true) {
+            Clear-Host
+            $lastRefresh=Get-Date
+            $nextRefresh=$lastRefresh.AddSeconds($refreshSecondsValue)
+            Write-AzDOWatchHeader -LastRefresh $lastRefresh -NextRefresh $nextRefresh -RefreshKeyDisplay $refreshKeyValue
+
+            try {
+                [Console]::SetCursorPosition(0, 2)
+            } catch {
+            }
+
+            Get-AzDOPulls @pullParameters
+
+            while ((Get-Date) -lt $nextRefresh) {
+                Write-AzDOWatchHeader -LastRefresh $lastRefresh -NextRefresh $nextRefresh -RefreshKeyDisplay $refreshKeyValue
+
+                if ([Console]::KeyAvailable) {
+                    $key=[Console]::ReadKey($true)
+
+                    if ($key.Key -eq [System.ConsoleKey]::Q) { return }
+                    if ($key.Key -eq $refreshKeyResolved) { break }
+                }
+
+                Start-Sleep -Milliseconds 200
+            }
+        }
+    } finally {
+        if ($null -ne $cursorVisibility) {
+            try {
+                [Console]::CursorVisible=$cursorVisibility
+            } catch {
+            }
+        }
+
+        if ($null -ne $windowTitle) {
+            try {
+                $Host.UI.RawUI.WindowTitle=$windowTitle
+            } catch {
+            }
+        }
+    }
 }
 
 function Resolve-AzDOPat {
@@ -915,5 +1223,12 @@ function Get-AzDOPulls {
 }
 
 if ($MyInvocation.InvocationName -ne '.') {
-    Get-AzDOPulls @PSBoundParameters
+    $runParameters=@{}
+    $excluded=if ($Watch) { @('Watch') } else { @('Watch','RefreshSeconds','RefreshKey') }
+
+    foreach ($entry in $PSBoundParameters.GetEnumerator()) {
+        if ($entry.Key -notin $excluded) { $runParameters[$entry.Key]=$entry.Value }
+    }
+
+    if ($Watch) { Invoke-AzDOWatch @runParameters } else { Get-AzDOPulls @runParameters }
 }
