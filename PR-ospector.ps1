@@ -277,7 +277,7 @@ function Resolve-AzDOConsoleKey {
     if ($text.Length -eq 1) {
         $char=[char]$text
 
-        if ([char]::IsLetter($char)) { return [System.ConsoleKey]([string]::ToUpperInvariant([string]$char)) }
+        if ([char]::IsLetter($char)) { return [System.ConsoleKey](([string]$char).ToUpperInvariant()) }
         if ([char]::IsDigit($char)) { return [System.ConsoleKey]("D$char") }
         if ($char -eq ' ') { return [System.ConsoleKey]::Spacebar }
     }
