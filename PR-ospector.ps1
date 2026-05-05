@@ -384,14 +384,14 @@ function Write-AzDOWatchHeader {
     $white="$([char]27)[38;2;255;255;255m" # #FFFFFF
     $lastRefreshText=$LastRefresh.ToString('ddd, MMMM d, yyyy h:mm:ss tt')
     $remainingText=Format-AzDOWatchDuration -TotalSeconds $remaining
-    $plainLine="PR-ospector | $lastRefreshText | next refresh $remainingText | refresh: $RefreshKeyDisplay quit: q"
+    $plainLine="PR-ospector | pulled: $lastRefreshText next: $remainingText | refresh: $RefreshKeyDisplay quit: q"
 
     if ($plainLine.Length -ge $width) {
         $available=[math]::Max(0, $width-1)
         $plainLine=$plainLine.Substring(0, $available)
         $line="${blue}${plainLine}${reset}"
     } else {
-        $line="${blue}PR-ospector${reset}${dim} | ${reset}${white}${lastRefreshText}${reset}${dim} | next refresh ${reset}${blue}${remainingText}${reset}${dim} | refresh: ${reset}${purple}${RefreshKeyDisplay}${reset}${dim} quit: ${reset}${purple}q${reset}"
+        $line="${blue}PR-ospector${reset} | ${dim}pulled: ${reset}${white}${lastRefreshText}${reset}${dim} ${dim}next: ${reset}${blue}${remainingText}${reset} | ${dim}refresh: ${reset}${purple}${RefreshKeyDisplay}${reset}${dim} quit: ${reset}${purple}q${reset}"
     }
 
     $line=$line + (' ' * [math]::Max(0, ($width-1)-$plainLine.Length))
