@@ -111,15 +111,22 @@ function Format-AzDOOutput {
 
     $dim="$([char]27)[2m"
     $purple="$([char]27)[38;2;140;107;200m" # #8C6BC8
-    $underline="$([char]27)[4m"
     $reset="$([char]27)[0m"
+    $clearLine="$([char]27)[0K"
+    $width=[math]::Max(1, (Get-AzDOConsoleWidth)-1)
+    $urlLines=@(
+        for ($i=0; $i -lt $Record.PRUrl.Length; $i+=$width) {
+            $length=[math]::Min($width, $Record.PRUrl.Length-$i)
+            "$purple$($Record.PRUrl.Substring($i, $length))$reset$clearLine"
+        }
+    )
 
-    @(
-        "$dim$(Format-RelativeTime $Record.CreationDate) by $($Record.CreatedBy)$reset | $(Format-AzDOReviewStatus -Status $Record.ReviewStatus)"
-        "[#$($Record.PullRequestId)] $($Record.Title)$reset"
-        "$purple$underline$($Record.PRUrl)$reset"
+    (@(
+        "$dim$(Format-RelativeTime $Record.CreationDate) by $($Record.CreatedBy)$reset | $(Format-AzDOReviewStatus -Status $Record.ReviewStatus)$reset$clearLine"
+        "[#$($Record.PullRequestId)] $($Record.Title)$reset$clearLine"
+        $urlLines
         ''
-    ) -join [Environment]::NewLine
+    ) | ForEach-Object { $_ }) -join [Environment]::NewLine
 }
 
 function Get-AzDOComparable {
@@ -322,17 +329,11 @@ function Get-AzDOWatchSettings {
         }
     }
 
-    if ($RefreshSecondsOverride -gt 0) {
-        $seconds=$RefreshSecondsOverride
-    }
+    if ($RefreshSecondsOverride -gt 0) { $seconds=$RefreshSecondsOverride }
 
-    if (-not [string]::IsNullOrWhiteSpace($RefreshKeyOverride)) {
-        $key=$RefreshKeyOverride
-    }
+    if (-not [string]::IsNullOrWhiteSpace($RefreshKeyOverride)) { $key=$RefreshKeyOverride }
 
-    if ($seconds -le 0) {
-        throw "watch.refreshSeconds must be a positive integer."
-    }
+    if ($seconds -le 0) { throw "watch.refreshSeconds must be a positive integer." }
 
     $consoleKey=Resolve-AzDOConsoleKey -KeySpec $key -SettingName 'watch.refreshKey'
 
@@ -382,28 +383,61 @@ function Write-AzDOWatchHeader {
     $blue="$([char]27)[38;2;0;255;255m" # #00FFFF
     $purple="$([char]27)[38;2;140;107;200m" # #8C6BC8
     $white="$([char]27)[38;2;255;255;255m" # #FFFFFF
+    $clearLine="$([char]27)[0K"
     $lastRefreshText=$LastRefresh.ToString('ddd, MMMM d, yyyy h:mm:ss tt')
     $remainingText=Format-AzDOWatchDuration -TotalSeconds $remaining
-    $plainLine="PR-ospector | pulled: $lastRefreshText next: $remainingText | refresh: $RefreshKeyDisplay quit: q"
 
-    if ($plainLine.Length -ge $width) {
-        $available=[math]::Max(0, $width-1)
-        $plainLine=$plainLine.Substring(0, $available)
-        $line="${blue}${plainLine}${reset}"
-    } else {
-        $line="${blue}PR-ospector${reset} | ${dim}pulled: ${reset}${white}${lastRefreshText}${reset}${dim} ${dim}next: ${reset}${blue}${remainingText}${reset} | ${dim}refresh: ${reset}${purple}${RefreshKeyDisplay}${reset}${dim} quit: ${reset}${purple}q${reset}"
+    $drawableWidth=[math]::Max(1, $width-1)
+    $segments=@(
+        @{ Text='PR-ospector'; Color=$blue }
+        @{ Text=' | pulled: '; Color=$dim }
+        @{ Text=$lastRefreshText; Color=$white }
+        @{ Text=' next: '; Color=$dim }
+        @{ Text=$remainingText; Color=$blue }
+        @{ Text=' | refresh: '; Color=$dim }
+        @{ Text=$RefreshKeyDisplay; Color=$purple }
+        @{ Text=' quit: '; Color=$dim }
+        @{ Text='q'; Color=$purple }
+    )
+    $lines=@('', '')
+    $row=0
+    $remainingWidth=$drawableWidth
+
+    foreach ($segment in $segments) {
+        $text=[string]$segment.Text
+        $offset=0
+
+        while ($offset -lt $text.Length -and $row -lt $lines.Count) {
+            if ($remainingWidth -le 0) {
+                $row++
+                $remainingWidth=$drawableWidth
+                continue
+            }
+
+            $length=[math]::Min($remainingWidth, $text.Length-$offset)
+            $visibleText=$text.Substring($offset, $length)
+            $lines[$row]="$($lines[$row])$($segment.Color)$visibleText$reset"
+            $offset+=$length
+            $remainingWidth-=$length
+        }
+
+        if ($row -ge $lines.Count) { break }
     }
 
-    $line=$line + (' ' * [math]::Max(0, ($width-1)-$plainLine.Length))
+    $firstLine="${reset}$($lines[0])${reset}${clearLine}"
+    $secondLine="${reset}$($lines[1])${reset}${clearLine}"
 
     try {
         $left=[Console]::CursorLeft
         $top=[Console]::CursorTop
         [Console]::SetCursorPosition(0, 0)
-        [Console]::Write($line)
+        [Console]::Write($firstLine)
+        [Console]::SetCursorPosition(0, 1)
+        [Console]::Write($secondLine)
+        $left=[math]::Min($left, [math]::Max(0, [Console]::BufferWidth-1))
+        $top=[math]::Min($top, [math]::Max(0, [Console]::BufferHeight-1))
         [Console]::SetCursorPosition($left, $top)
     } catch {
-        Write-Host $line
     }
 }
 
