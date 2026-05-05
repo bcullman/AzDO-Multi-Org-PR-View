@@ -382,16 +382,16 @@ function Write-AzDOWatchHeader {
     $blue="$([char]27)[38;2;0;255;255m" # #00FFFF
     $purple="$([char]27)[38;2;140;107;200m" # #8C6BC8
     $white="$([char]27)[38;2;255;255;255m" # #FFFFFF
-    $lastRefreshText=$LastRefresh.ToString('F')
+    $lastRefreshText=$LastRefresh.ToString('ddd, MMMM d, yyyy h:mm:ss tt')
     $remainingText=Format-AzDOWatchDuration -TotalSeconds $remaining
-    $plainLine="PR-ospector | $lastRefreshText | next refresh $remainingText | refresh now: $RefreshKeyDisplay | quit: q"
+    $plainLine="PR-ospector | $lastRefreshText | next refresh $remainingText | refresh: $RefreshKeyDisplay quit: q"
 
     if ($plainLine.Length -ge $width) {
         $available=[math]::Max(0, $width-1)
         $plainLine=$plainLine.Substring(0, $available)
         $line="${blue}${plainLine}${reset}"
     } else {
-        $line="${blue}PR-ospector${reset}${dim} | ${reset}${white}${lastRefreshText}${reset}${dim} | next refresh ${reset}${blue}${remainingText}${reset}${dim} | refresh now: ${reset}${purple}${RefreshKeyDisplay}${reset}${dim} | quit: ${reset}${purple}q${reset}"
+        $line="${blue}PR-ospector${reset}${dim} | ${reset}${white}${lastRefreshText}${reset}${dim} | next refresh ${reset}${blue}${remainingText}${reset}${dim} | refresh: ${reset}${purple}${RefreshKeyDisplay}${reset}${dim} quit: ${reset}${purple}q${reset}"
     }
 
     $line=$line + (' ' * [math]::Max(0, ($width-1)-$plainLine.Length))
