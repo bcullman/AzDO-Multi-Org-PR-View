@@ -64,27 +64,44 @@ function Format-RelativeTime {
     "$([math]::Floor($span.TotalDays/365))y ago"
 }
 
+function Get-AzDOStyle {
+    $esc=[char]27
+
+    [pscustomobject]@{
+        Reset="$esc[0m";
+        Dim="$esc[2m";
+        ClearLine="$esc[0K";
+        Cyan="$esc[38;2;0;255;255m";       # #00FFFF
+        Purple="$esc[38;2;140;107;200m";   # #8C6BC8
+        White="$esc[38;2;255;255;255m";    # #FFFFFF
+        Green="$esc[38;2;85;163;98m";      # #55A362
+        Orange="$esc[38;2;214;118;40m";    # #D67628
+        Blue="$esc[38;2;0;90;156m";        # #005A9C
+        Red="$esc[38;2;205;74;69m";        # #CD4A45
+    }
+}
+
 function Format-AzDOReviewStatus {
     param([AllowNull()][string]$Status)
 
     if ([string]::IsNullOrWhiteSpace($Status)) { return $Status }
 
-    $reset="$([char]27)[0m"
+    $style=Get-AzDOStyle
     $color=switch ($Status) {
-        'Approved'                  { "$([char]27)[38;2;85;163;98m"; break }    # #55A362
-        'Approved with suggestions' { "$([char]27)[38;2;85;163;98m"; break }    # #55A362
-        'Review Needed'             { "$([char]27)[38;2;255;255;255m"; break }  # #FFFFFF
-        'Re-review Needed'          { "$([char]27)[38;2;255;255;255m"; break }  # #FFFFFF
-        'Waiting for author'        { "$([char]27)[38;2;214;118;40m"; break }   # #D67628
-        'Draft'                     { "$([char]27)[38;2;0;90;156m"; break }     # #005A9C
-        'Rejected'                  { "$([char]27)[38;2;205;74;69m"; break }    # #CD4A45
-        'Declined'                  { "$([char]27)[38;2;205;74;69m"; break }    # #CD4A45
+        'Approved'                  { $style.Green; break }
+        'Approved with suggestions' { $style.Green; break }
+        'Review Needed'             { $style.White; break }
+        'Re-review Needed'          { $style.White; break }
+        'Waiting for author'        { $style.Orange; break }
+        'Draft'                     { $style.Blue; break }
+        'Rejected'                  { $style.Red; break }
+        'Declined'                  { $style.Red; break }
         default { $null }
     }
 
     if ($null -eq $color) { return $Status }
 
-    "$color$Status$reset"
+    "$color$Status$($style.Reset)"
 }
 
 function Format-AzDOOutput {
@@ -100,30 +117,26 @@ function Format-AzDOOutput {
             default { $Section.ToUpperInvariant() }
         }
 
-        $blue="$([char]27)[38;2;0;255;255m" # #00FFFF
-        $reset="$([char]27)[0m"
+        $style=Get-AzDOStyle
 
         return @(
-            "$blue$title$reset"
-            "$blue$('='*$title.Length)$reset"
+            "$($style.Cyan)$title$($style.Reset)"
+            "$($style.Cyan)$('='*$title.Length)$($style.Reset)"
         ) -join [Environment]::NewLine
     }
 
-    $dim="$([char]27)[2m"
-    $purple="$([char]27)[38;2;140;107;200m" # #8C6BC8
-    $reset="$([char]27)[0m"
-    $clearLine="$([char]27)[0K"
+    $style=Get-AzDOStyle
     $width=[math]::Max(1, (Get-AzDOConsoleWidth)-1)
     $urlLines=@(
         for ($i=0; $i -lt $Record.PRUrl.Length; $i+=$width) {
             $length=[math]::Min($width, $Record.PRUrl.Length-$i)
-            "$purple$($Record.PRUrl.Substring($i, $length))$reset$clearLine"
+            "$($style.Purple)$($Record.PRUrl.Substring($i, $length))$($style.Reset)$($style.ClearLine)"
         }
     )
 
     (@(
-        "$dim$(Format-RelativeTime $Record.CreationDate) by $($Record.CreatedBy)$reset | $(Format-AzDOReviewStatus -Status $Record.ReviewStatus)$reset$clearLine"
-        "[#$($Record.PullRequestId)] $($Record.Title)$reset$clearLine"
+        "$($style.Dim)$(Format-RelativeTime $Record.CreationDate) by $($Record.CreatedBy)$($style.Reset) | $(Format-AzDOReviewStatus -Status $Record.ReviewStatus)$($style.Reset)$($style.ClearLine)"
+        "[#$($Record.PullRequestId)] $($Record.Title)$($style.Reset)$($style.ClearLine)"
         $urlLines
         ''
     ) | ForEach-Object { $_ }) -join [Environment]::NewLine
@@ -378,26 +391,21 @@ function Write-AzDOWatchHeader {
     $now=Get-Date
     $remaining=[int][math]::Ceiling(($NextRefresh-$now).TotalSeconds)
     $width=Get-AzDOConsoleWidth
-    $reset="$([char]27)[0m"
-    $dim="$([char]27)[2m"
-    $blue="$([char]27)[38;2;0;255;255m" # #00FFFF
-    $purple="$([char]27)[38;2;140;107;200m" # #8C6BC8
-    $white="$([char]27)[38;2;255;255;255m" # #FFFFFF
-    $clearLine="$([char]27)[0K"
+    $style=Get-AzDOStyle
     $lastRefreshText=$LastRefresh.ToString('ddd, MMMM d, yyyy h:mm:ss tt')
     $remainingText=Format-AzDOWatchDuration -TotalSeconds $remaining
 
     $drawableWidth=[math]::Max(1, $width-1)
     $segments=@(
-        @{ Text='PR-ospector'; Color=$blue }
-        @{ Text=' | pulled: '; Color=$dim }
-        @{ Text=$lastRefreshText; Color=$white }
-        @{ Text=' next: '; Color=$dim }
-        @{ Text=$remainingText; Color=$blue }
-        @{ Text=' | refresh: '; Color=$dim }
-        @{ Text=$RefreshKeyDisplay; Color=$purple }
-        @{ Text=' quit: '; Color=$dim }
-        @{ Text='q'; Color=$purple }
+        @{ Text='PR-ospector'; Color=$style.Cyan }
+        @{ Text=' | pulled: '; Color=$style.Dim }
+        @{ Text=$lastRefreshText; Color=$style.White }
+        @{ Text=' next: '; Color=$style.Dim }
+        @{ Text=$remainingText; Color=$style.Cyan }
+        @{ Text=' | refresh: '; Color=$style.Dim }
+        @{ Text=$RefreshKeyDisplay; Color=$style.Purple }
+        @{ Text=' quit: '; Color=$style.Dim }
+        @{ Text='q'; Color=$style.Purple }
     )
     $lines=@('', '')
     $row=0
@@ -416,7 +424,7 @@ function Write-AzDOWatchHeader {
 
             $length=[math]::Min($remainingWidth, $text.Length-$offset)
             $visibleText=$text.Substring($offset, $length)
-            $lines[$row]="$($lines[$row])$($segment.Color)$visibleText$reset"
+            $lines[$row]="$($lines[$row])$($segment.Color)$visibleText$($style.Reset)"
             $offset+=$length
             $remainingWidth-=$length
         }
@@ -424,8 +432,8 @@ function Write-AzDOWatchHeader {
         if ($row -ge $lines.Count) { break }
     }
 
-    $firstLine="${reset}$($lines[0])${reset}${clearLine}"
-    $secondLine="${reset}$($lines[1])${reset}${clearLine}"
+    $firstLine="$($style.Reset)$($lines[0])$($style.Reset)$($style.ClearLine)"
+    $secondLine="$($style.Reset)$($lines[1])$($style.Reset)$($style.ClearLine)"
 
     try {
         $left=[Console]::CursorLeft
