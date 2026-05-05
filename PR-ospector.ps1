@@ -309,67 +309,6 @@ function Resolve-AzDOConsoleKey {
     }
 }
 
-function Get-AzDOWatchSettings {
-    param(
-        [string]$ConfigPath,
-        [bool]$IsDirect,
-        [int]$RefreshSecondsOverride,
-        [string]$RefreshKeyOverride
-    )
-
-    $seconds=600
-    $key='r'
-
-    if (-not $IsDirect) {
-        $parsed=Read-AzDOConfig -ConfigPath $ConfigPath
-        $watchConfig=Get-AzDOObjectPropertyValue -InputObject $parsed -PropertyName 'watch'
-
-        if ($null -ne $watchConfig) {
-            $configuredSeconds=Get-AzDOObjectPropertyValue -InputObject $watchConfig -PropertyName 'refreshSeconds'
-            $configuredKey=Get-AzDOObjectPropertyValue -InputObject $watchConfig -PropertyName 'refreshKey'
-
-            if ($null -ne $configuredSeconds) {
-                try {
-                    $seconds=[int]$configuredSeconds
-                } catch {
-                    throw "watch.refreshSeconds must be a positive integer."
-                }
-            }
-
-            if ($null -ne $configuredKey) {
-                $key=[string]$configuredKey
-            }
-        }
-    }
-
-    if ($RefreshSecondsOverride -gt 0) { $seconds=$RefreshSecondsOverride }
-
-    if (-not [string]::IsNullOrWhiteSpace($RefreshKeyOverride)) { $key=$RefreshKeyOverride }
-
-    if ($seconds -le 0) { throw "watch.refreshSeconds must be a positive integer." }
-
-    $consoleKey=Resolve-AzDOConsoleKey -KeySpec $key -SettingName 'watch.refreshKey'
-
-    [pscustomobject]@{
-        RefreshSeconds=$seconds;
-        RefreshKey=$consoleKey;
-        RefreshKeyDisplay=[string]$key
-    }
-}
-
-function Format-AzDOWatchDuration {
-    param([int]$TotalSeconds)
-
-    $remaining=[math]::Max(0, $TotalSeconds)
-    $span=[TimeSpan]::FromSeconds($remaining)
-
-    if ($span.TotalHours -ge 1) {
-        return $span.ToString('hh\:mm\:ss')
-    }
-
-    $span.ToString('mm\:ss')
-}
-
 function Get-AzDOConsoleWidth {
     try {
         if ([Console]::WindowWidth -gt 0) {
@@ -392,8 +331,9 @@ function Write-AzDOWatchHeader {
     $remaining=[int][math]::Ceiling(($NextRefresh-$now).TotalSeconds)
     $width=Get-AzDOConsoleWidth
     $style=Get-AzDOStyle
+    $remainingSpan=[TimeSpan]::FromSeconds([math]::Max(0, $remaining))
     $lastRefreshText=$LastRefresh.ToString('ddd, MMMM d, yyyy h:mm:ss tt')
-    $remainingText=Format-AzDOWatchDuration -TotalSeconds $remaining
+    $remainingText=if ($remainingSpan.TotalHours -ge 1) { $remainingSpan.ToString('hh\:mm\:ss') } else { $remainingSpan.ToString('mm\:ss') }
 
     $drawableWidth=[math]::Max(1, $width-1)
     $segments=@(
@@ -501,11 +441,30 @@ function Invoke-AzDOWatch {
         throw "-RefreshKey must be a non-empty key name or single character."
     }
 
-    $settings=Get-AzDOWatchSettings `
-        -ConfigPath $ConfigPath `
-        -IsDirect ($PSCmdlet.ParameterSetName -eq 'Direct') `
-        -RefreshSecondsOverride $RefreshSeconds `
-        -RefreshKeyOverride $RefreshKey
+    $refreshSecondsValue=600
+    $refreshKeyValue='r'
+
+    if ($PSCmdlet.ParameterSetName -ne 'Direct') {
+        $watchConfig=Get-AzDOObjectPropertyValue -InputObject (Read-AzDOConfig -ConfigPath $ConfigPath) -PropertyName 'watch'
+
+        if ($null -ne $watchConfig) {
+            $configuredSeconds=Get-AzDOObjectPropertyValue -InputObject $watchConfig -PropertyName 'refreshSeconds'
+            $configuredKey=Get-AzDOObjectPropertyValue -InputObject $watchConfig -PropertyName 'refreshKey'
+
+            if ($null -ne $configuredSeconds) {
+                try { $refreshSecondsValue=[int]$configuredSeconds } catch { throw "watch.refreshSeconds must be a positive integer." }
+            }
+
+            if ($null -ne $configuredKey) { $refreshKeyValue=[string]$configuredKey }
+        }
+    }
+
+    if ($RefreshSeconds -gt 0) { $refreshSecondsValue=$RefreshSeconds }
+    if (-not [string]::IsNullOrWhiteSpace($RefreshKey)) { $refreshKeyValue=$RefreshKey }
+    if ($refreshSecondsValue -le 0) { throw "watch.refreshSeconds must be a positive integer." }
+
+    $refreshKeyValue=[string]$refreshKeyValue
+    $refreshKeyResolved=Resolve-AzDOConsoleKey -KeySpec $refreshKeyValue -SettingName 'watch.refreshKey'
 
     $pullParameters=@{
         View=$View;
@@ -541,8 +500,8 @@ function Invoke-AzDOWatch {
         while ($true) {
             Clear-Host
             $lastRefresh=Get-Date
-            $nextRefresh=$lastRefresh.AddSeconds($settings.RefreshSeconds)
-            Write-AzDOWatchHeader -LastRefresh $lastRefresh -NextRefresh $nextRefresh -RefreshKeyDisplay $settings.RefreshKeyDisplay
+            $nextRefresh=$lastRefresh.AddSeconds($refreshSecondsValue)
+            Write-AzDOWatchHeader -LastRefresh $lastRefresh -NextRefresh $nextRefresh -RefreshKeyDisplay $refreshKeyValue
 
             try {
                 [Console]::SetCursorPosition(0, 2)
@@ -552,13 +511,13 @@ function Invoke-AzDOWatch {
             Get-AzDOPulls @pullParameters
 
             while ((Get-Date) -lt $nextRefresh) {
-                Write-AzDOWatchHeader -LastRefresh $lastRefresh -NextRefresh $nextRefresh -RefreshKeyDisplay $settings.RefreshKeyDisplay
+                Write-AzDOWatchHeader -LastRefresh $lastRefresh -NextRefresh $nextRefresh -RefreshKeyDisplay $refreshKeyValue
 
                 if ([Console]::KeyAvailable) {
                     $key=[Console]::ReadKey($true)
 
                     if ($key.Key -eq [System.ConsoleKey]::Q) { return }
-                    if ($key.Key -eq $settings.RefreshKey) { break }
+                    if ($key.Key -eq $refreshKeyResolved) { break }
                 }
 
                 Start-Sleep -Milliseconds 200
@@ -1272,24 +1231,11 @@ function Get-AzDOPulls {
 
 if ($MyInvocation.InvocationName -ne '.') {
     $runParameters=@{}
+    $excluded=if ($Watch) { @('Watch') } else { @('Watch','RefreshSeconds','RefreshKey') }
 
-    foreach ($key in $PSBoundParameters.Keys) {
-        if ($key -notin 'Watch','RefreshSeconds','RefreshKey') {
-            $runParameters[$key]=$PSBoundParameters[$key]
-        }
+    foreach ($entry in $PSBoundParameters.GetEnumerator()) {
+        if ($entry.Key -notin $excluded) { $runParameters[$entry.Key]=$entry.Value }
     }
 
-    if ($Watch) {
-        if ($PSBoundParameters.ContainsKey('RefreshSeconds')) {
-            $runParameters.RefreshSeconds=$RefreshSeconds
-        }
-
-        if ($PSBoundParameters.ContainsKey('RefreshKey')) {
-            $runParameters.RefreshKey=$RefreshKey
-        }
-
-        Invoke-AzDOWatch @runParameters
-    } else {
-        Get-AzDOPulls @runParameters
-    }
+    if ($Watch) { Invoke-AzDOWatch @runParameters } else { Get-AzDOPulls @runParameters }
 }
