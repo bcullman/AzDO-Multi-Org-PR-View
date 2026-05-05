@@ -523,11 +523,18 @@ function Invoke-AzDOWatch {
     }
 
     $cursorVisibility=$null
+    $windowTitle=$null
 
     try {
         try {
             $cursorVisibility=[Console]::CursorVisible
             [Console]::CursorVisible=$false
+        } catch {
+        }
+
+        try {
+            $windowTitle=$Host.UI.RawUI.WindowTitle
+            $Host.UI.RawUI.WindowTitle='PR-ospector'
         } catch {
         }
 
@@ -561,6 +568,13 @@ function Invoke-AzDOWatch {
         if ($null -ne $cursorVisibility) {
             try {
                 [Console]::CursorVisible=$cursorVisibility
+            } catch {
+            }
+        }
+
+        if ($null -ne $windowTitle) {
+            try {
+                $Host.UI.RawUI.WindowTitle=$windowTitle
             } catch {
             }
         }
