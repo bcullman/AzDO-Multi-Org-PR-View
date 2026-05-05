@@ -37,6 +37,10 @@ The rest of this README covers how to use `PR-ospector.ps1`.
 Example:
 
 ```yml
+watch:
+  refreshSeconds: 600
+  refreshKey: r
+
 organizations:
   - name: org1
     pat: "$env:PAT_AZDO"
@@ -59,6 +63,8 @@ Fields:
 - `pat`: PAT string or environment variable reference like `"$env:PAT_AZDO"`
 - `groups`: reviewer groups to match when using requested-review views
 - `projects`: projects to scan in normal configured mode
+- `watch.refreshSeconds`: seconds between automatic refreshes when running with `-Watch`; defaults to `600`
+- `watch.refreshKey`: key that triggers an immediate refresh in watch mode; defaults to `r`
 
 ## Quick Start
 1. Copy [sample-config.yml](/mnt/c/source/github/bcullman/AzDO-Multi-Org-PR-View/sample-config.yml) to `config.yml`.
@@ -107,8 +113,17 @@ Then run:
 .\PR-ospector.ps1
 ```
 
+To run the live dashboard with an automatic refresh countdown:
+
+```powershell
+.\PR-ospector.ps1 -Watch
+```
+
 Useful options:
 - `-ConfigPath .\config.yml` to use a different config file
+- `-Watch` to keep the dashboard open, refresh on the configured interval, and accept the configured refresh key for an immediate refresh
+- `-RefreshSeconds 300` to override `watch.refreshSeconds` for the current watch run
+- `-RefreshKey F5` to override `watch.refreshKey` for the current watch run
 - `-Mode Discover` to scan all visible projects and write newly found `projects:` entries back into YAML config
 - `-View Both` to show both created and requested-review sections
 - `-View Created` to show only PRs created by the authenticated user
@@ -129,6 +144,8 @@ To see every open requested-review PR instead of only actionable ones:
 ```
 
 When `-Org` is provided, the script uses direct parameters instead of `config.yml`.
+
+Watch mode requires an interactive console because it reads key presses and updates the countdown in place. Press the configured refresh key, `r` by default, to refresh immediately. Press `q` to quit. `-Watch -Mode Discover` is blocked because Discover mode can update YAML config.
 
 Normal output is grouped above the org level like this:
 

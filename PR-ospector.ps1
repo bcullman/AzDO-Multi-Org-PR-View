@@ -21,6 +21,12 @@ param(
     [ValidateSet('Configured', 'Discover')]
     [string]$Mode = 'Configured',
 
+    [switch]$Watch,
+
+    [int]$RefreshSeconds,
+
+    [string]$RefreshKey,
+
     [Parameter(ParameterSetName = 'Direct')]
     [object[]]$Groups = @()
 )
@@ -152,33 +158,14 @@ function Get-AzDOIdentityPropertyValue {
     $requestedValueProperty.Value
 }
 
-function Get-AzDOConfigCollection {
-    param(
-        [string]$ConfigPath,
-        [string]$Org,
-        [string]$Pat,
-        [object[]]$Groups,
-        [bool]$IsDirect
-    )
-
-    if ($IsDirect) {
-        return @(
-            [pscustomobject]@{
-                Name = $Org;
-                Pat = $Pat;
-                Enabled = $true;
-                Groups = @(@($Groups) | Where-Object {-not [string]::IsNullOrWhiteSpace([string]$_)});
-                Projects = @();
-                FromConfig = $false
-            }
-        )
-    }
+function Read-AzDOConfig {
+    param([string]$ConfigPath)
 
     if (-not (Test-Path -LiteralPath $ConfigPath)) { throw "Config file '$ConfigPath' does not exist." }
 
     $ext=[IO.Path]::GetExtension($ConfigPath).ToLowerInvariant()
 
-    $parsed=switch($ext) {
+    switch($ext) {
         '.json' {
             Get-Content -LiteralPath $ConfigPath -Raw | ConvertFrom-Json -Depth 100
             break
@@ -202,6 +189,54 @@ function Get-AzDOConfigCollection {
             throw "Unsupported config file extension '$ext'. Supported extensions are .json, .psd1, .yml, and .yaml."
         }
     }
+}
+
+function Get-AzDOObjectPropertyValue {
+    param(
+        [AllowNull()][object]$InputObject,
+        [string]$PropertyName
+    )
+
+    if ($null -eq $InputObject) { return $null }
+
+    if ($InputObject -is [System.Collections.IDictionary]) {
+        if ($InputObject.Contains($PropertyName)) {
+            return $InputObject[$PropertyName]
+        }
+
+        return $null
+    }
+
+    $property=$InputObject.PSObject.Properties[$PropertyName]
+
+    if ($null -eq $property) { return $null }
+
+    $property.Value
+}
+
+function Get-AzDOConfigCollection {
+    param(
+        [string]$ConfigPath,
+        [string]$Org,
+        [string]$Pat,
+        [object[]]$Groups,
+        [bool]$IsDirect
+    )
+
+    if ($IsDirect) {
+        return @(
+            [pscustomobject]@{
+                Name = $Org;
+                Pat = $Pat;
+                Enabled = $true;
+                Groups = @(@($Groups) | Where-Object {-not [string]::IsNullOrWhiteSpace([string]$_)});
+                Projects = @();
+                FromConfig = $false
+            }
+        )
+    }
+
+    $parsed=Read-AzDOConfig -ConfigPath $ConfigPath
 
     $orgs=if ($parsed.organizations) {
         @($parsed.organizations)
@@ -223,6 +258,260 @@ function Get-AzDOConfigCollection {
             }
         }
     )
+}
+
+function Resolve-AzDOConsoleKey {
+    param(
+        [object]$KeySpec,
+        [string]$SettingName
+    )
+
+    $text=[string]$KeySpec
+
+    if ([string]::IsNullOrWhiteSpace($text)) {
+        throw "$SettingName must be a non-empty key name or single character."
+    }
+
+    $text=$text.Trim()
+
+    if ($text.Length -eq 1) {
+        $char=[char]$text
+
+        if ([char]::IsLetter($char)) { return [System.ConsoleKey]([string]::ToUpperInvariant([string]$char)) }
+        if ([char]::IsDigit($char)) { return [System.ConsoleKey]("D$char") }
+        if ($char -eq ' ') { return [System.ConsoleKey]::Spacebar }
+    }
+
+    try {
+        return [System.ConsoleKey][Enum]::Parse([System.ConsoleKey], $text, $true)
+    } catch {
+        throw "$SettingName value '$text' is not a supported console key. Use a single letter, digit, or ConsoleKey name such as F5 or Spacebar."
+    }
+}
+
+function Get-AzDOWatchSettings {
+    param(
+        [string]$ConfigPath,
+        [bool]$IsDirect,
+        [int]$RefreshSecondsOverride,
+        [string]$RefreshKeyOverride
+    )
+
+    $seconds=600
+    $key='r'
+
+    if (-not $IsDirect) {
+        $parsed=Read-AzDOConfig -ConfigPath $ConfigPath
+        $watchConfig=Get-AzDOObjectPropertyValue -InputObject $parsed -PropertyName 'watch'
+
+        if ($null -ne $watchConfig) {
+            $configuredSeconds=Get-AzDOObjectPropertyValue -InputObject $watchConfig -PropertyName 'refreshSeconds'
+            $configuredKey=Get-AzDOObjectPropertyValue -InputObject $watchConfig -PropertyName 'refreshKey'
+
+            if ($null -ne $configuredSeconds) {
+                try {
+                    $seconds=[int]$configuredSeconds
+                } catch {
+                    throw "watch.refreshSeconds must be a positive integer."
+                }
+            }
+
+            if ($null -ne $configuredKey) {
+                $key=[string]$configuredKey
+            }
+        }
+    }
+
+    if ($RefreshSecondsOverride -gt 0) {
+        $seconds=$RefreshSecondsOverride
+    }
+
+    if (-not [string]::IsNullOrWhiteSpace($RefreshKeyOverride)) {
+        $key=$RefreshKeyOverride
+    }
+
+    if ($seconds -le 0) {
+        throw "watch.refreshSeconds must be a positive integer."
+    }
+
+    $consoleKey=Resolve-AzDOConsoleKey -KeySpec $key -SettingName 'watch.refreshKey'
+
+    [pscustomobject]@{
+        RefreshSeconds=$seconds;
+        RefreshKey=$consoleKey;
+        RefreshKeyDisplay=[string]$key
+    }
+}
+
+function Format-AzDOWatchDuration {
+    param([int]$TotalSeconds)
+
+    $remaining=[math]::Max(0, $TotalSeconds)
+    $span=[TimeSpan]::FromSeconds($remaining)
+
+    if ($span.TotalHours -ge 1) {
+        return $span.ToString('hh\:mm\:ss')
+    }
+
+    $span.ToString('mm\:ss')
+}
+
+function Get-AzDOConsoleWidth {
+    try {
+        if ([Console]::WindowWidth -gt 0) {
+            return [Console]::WindowWidth
+        }
+    } catch {
+    }
+
+    120
+}
+
+function Write-AzDOWatchHeader {
+    param(
+        [datetime]$LastRefresh,
+        [datetime]$NextRefresh,
+        [string]$RefreshKeyDisplay
+    )
+
+    $now=Get-Date
+    $remaining=[int][math]::Ceiling(($NextRefresh-$now).TotalSeconds)
+    $line="PR-ospector | $($LastRefresh.ToString('HH:mm:ss')) | next refresh $(Format-AzDOWatchDuration -TotalSeconds $remaining) | refresh now: $RefreshKeyDisplay | quit: q"
+    $width=Get-AzDOConsoleWidth
+
+    if ($line.Length -ge $width) {
+        $line=$line.Substring(0, [math]::Max(0, $width-1))
+    }
+
+    $line=$line.PadRight([math]::Max(0, $width-1))
+
+    try {
+        $left=[Console]::CursorLeft
+        $top=[Console]::CursorTop
+        [Console]::SetCursorPosition(0, 0)
+        [Console]::Write($line)
+        [Console]::SetCursorPosition($left, $top)
+    } catch {
+        Write-Host $line
+    }
+}
+
+function Invoke-AzDOWatch {
+    [CmdletBinding(DefaultParameterSetName='ConfigPath')]
+    param(
+        [Parameter(ParameterSetName='ConfigPath')]
+        [string]$ConfigPath,
+
+        [Parameter(Mandatory=$true,ParameterSetName='Direct')]
+        [string]$Org,
+
+        [Parameter(ParameterSetName='Direct')]
+        [string]$Pat,
+
+        [ValidateSet('Created','ReviewRequested','Both')]
+        [string]$View='Both',
+
+        [ValidateSet('active','completed','abandoned','all')]
+        [string]$Status='active',
+
+        [ValidateSet('Pending','All')]
+        [string]$ReviewState='Pending',
+
+        [ValidateSet('Configured','Discover')]
+        [string]$Mode='Configured',
+
+        [int]$RefreshSeconds,
+
+        [string]$RefreshKey,
+
+        [Parameter(ParameterSetName='Direct')]
+        [object[]]$Groups=@()
+    )
+
+    if ($Mode -eq 'Discover') {
+        throw "Watch mode does not support -Mode Discover because Discover can update YAML config. Run Discover as a one-shot command first."
+    }
+
+    if ([Console]::IsInputRedirected -or [Console]::IsOutputRedirected) {
+        throw "Watch mode requires an interactive console because it reads keys and updates the countdown in place."
+    }
+
+    if ($PSCmdlet.ParameterSetName -eq 'ConfigPath' -and [string]::IsNullOrWhiteSpace($ConfigPath)) {
+        $ConfigPath = $script:ConfigPath
+    }
+
+    if ($PSBoundParameters.ContainsKey('RefreshSeconds') -and $RefreshSeconds -le 0) {
+        throw "-RefreshSeconds must be a positive integer."
+    }
+
+    if ($PSBoundParameters.ContainsKey('RefreshKey') -and [string]::IsNullOrWhiteSpace($RefreshKey)) {
+        throw "-RefreshKey must be a non-empty key name or single character."
+    }
+
+    $settings=Get-AzDOWatchSettings `
+        -ConfigPath $ConfigPath `
+        -IsDirect ($PSCmdlet.ParameterSetName -eq 'Direct') `
+        -RefreshSecondsOverride $RefreshSeconds `
+        -RefreshKeyOverride $RefreshKey
+
+    $pullParameters=@{
+        View=$View;
+        Status=$Status;
+        ReviewState=$ReviewState;
+        Mode=$Mode
+    }
+
+    if ($PSCmdlet.ParameterSetName -eq 'Direct') {
+        $pullParameters.Org=$Org
+        $pullParameters.Pat=$Pat
+        $pullParameters.Groups=$Groups
+    } else {
+        $pullParameters.ConfigPath=$ConfigPath
+    }
+
+    $cursorVisibility=$null
+
+    try {
+        try {
+            $cursorVisibility=[Console]::CursorVisible
+            [Console]::CursorVisible=$false
+        } catch {
+        }
+
+        while ($true) {
+            Clear-Host
+            $lastRefresh=Get-Date
+            $nextRefresh=$lastRefresh.AddSeconds($settings.RefreshSeconds)
+            Write-AzDOWatchHeader -LastRefresh $lastRefresh -NextRefresh $nextRefresh -RefreshKeyDisplay $settings.RefreshKeyDisplay
+
+            try {
+                [Console]::SetCursorPosition(0, 2)
+            } catch {
+            }
+
+            Get-AzDOPulls @pullParameters
+
+            while ((Get-Date) -lt $nextRefresh) {
+                Write-AzDOWatchHeader -LastRefresh $lastRefresh -NextRefresh $nextRefresh -RefreshKeyDisplay $settings.RefreshKeyDisplay
+
+                if ([Console]::KeyAvailable) {
+                    $key=[Console]::ReadKey($true)
+
+                    if ($key.Key -eq [System.ConsoleKey]::Q) { return }
+                    if ($key.Key -eq $settings.RefreshKey) { break }
+                }
+
+                Start-Sleep -Milliseconds 200
+            }
+        }
+    } finally {
+        if ($null -ne $cursorVisibility) {
+            try {
+                [Console]::CursorVisible=$cursorVisibility
+            } catch {
+            }
+        }
+    }
 }
 
 function Resolve-AzDOPat {
@@ -915,5 +1204,25 @@ function Get-AzDOPulls {
 }
 
 if ($MyInvocation.InvocationName -ne '.') {
-    Get-AzDOPulls @PSBoundParameters
+    $runParameters=@{}
+
+    foreach ($key in $PSBoundParameters.Keys) {
+        if ($key -notin 'Watch','RefreshSeconds','RefreshKey') {
+            $runParameters[$key]=$PSBoundParameters[$key]
+        }
+    }
+
+    if ($Watch) {
+        if ($PSBoundParameters.ContainsKey('RefreshSeconds')) {
+            $runParameters.RefreshSeconds=$RefreshSeconds
+        }
+
+        if ($PSBoundParameters.ContainsKey('RefreshKey')) {
+            $runParameters.RefreshKey=$RefreshKey
+        }
+
+        Invoke-AzDOWatch @runParameters
+    } else {
+        Get-AzDOPulls @runParameters
+    }
 }
