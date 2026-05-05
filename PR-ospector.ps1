@@ -466,20 +466,13 @@ function Invoke-AzDOWatch {
     $refreshKeyValue=[string]$refreshKeyValue
     $refreshKeyResolved=Resolve-AzDOConsoleKey -KeySpec $refreshKeyValue -SettingName 'watch.refreshKey'
 
-    $pullParameters=@{
-        View=$View;
-        Status=$Status;
-        ReviewState=$ReviewState;
-        Mode=$Mode
+    $pullParameters=@{}
+
+    foreach ($entry in $PSBoundParameters.GetEnumerator()) {
+        if ($entry.Key -notin 'RefreshSeconds','RefreshKey') { $pullParameters[$entry.Key]=$entry.Value }
     }
 
-    if ($PSCmdlet.ParameterSetName -eq 'Direct') {
-        $pullParameters.Org=$Org
-        $pullParameters.Pat=$Pat
-        $pullParameters.Groups=$Groups
-    } else {
-        $pullParameters.ConfigPath=$ConfigPath
-    }
+    if ($PSCmdlet.ParameterSetName -eq 'ConfigPath') { $pullParameters.ConfigPath=$ConfigPath }
 
     $cursorVisibility=$null
     $windowTitle=$null
