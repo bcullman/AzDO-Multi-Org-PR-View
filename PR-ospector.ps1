@@ -185,30 +185,15 @@ function Read-AzDOConfig {
 
     $ext=[IO.Path]::GetExtension($ConfigPath).ToLowerInvariant()
 
-    switch($ext) {
-        '.json' {
-            Get-Content -LiteralPath $ConfigPath -Raw | ConvertFrom-Json -Depth 100
-            break
-        }
-
-        '.psd1' {
-            Import-PowerShellDataFile -Path $ConfigPath
-            break
-        }
-
-        {$_ -in '.yml', '.yaml'} {
-            if (-not (Get-Command ConvertFrom-Yaml -ErrorAction SilentlyContinue)) {
-                throw "YAML config requires ConvertFrom-Yaml to be available in this PowerShell session."
-            }
-
-            Get-Content -LiteralPath $ConfigPath -Raw | ConvertFrom-Yaml
-            break
-        }
-
-        default {
-            throw "Unsupported config file extension '$ext'. Supported extensions are .json, .psd1, .yml, and .yaml."
-        }
+    if ($ext -notin '.yml','.yaml') {
+        throw "Unsupported config file extension '$ext'. Supported extensions are .yml and .yaml."
     }
+
+    if (-not (Get-Command ConvertFrom-Yaml -ErrorAction SilentlyContinue)) {
+        throw "YAML config requires ConvertFrom-Yaml to be available in this PowerShell session."
+    }
+
+    Get-Content -LiteralPath $ConfigPath -Raw | ConvertFrom-Yaml
 }
 
 function Get-AzDOObjectPropertyValue {
@@ -964,17 +949,11 @@ function Update-AzDOConfigFromDiscover {
 
     if ($DiscoveredProjectsByOrganization.Count -eq 0) { return $false }
 
-    $ext=[IO.Path]::GetExtension($ConfigPath).ToLowerInvariant()
-
-    if ($ext -notin '.yml','.yaml') {
-        throw "Discover mode can only update YAML config files. Unsupported config extension '$ext'."
+    if (-not (Get-Command ConvertTo-Yaml -ErrorAction SilentlyContinue)) {
+        throw "Discover mode YAML updates require ConvertTo-Yaml to be available in this PowerShell session."
     }
 
-    if (-not (Get-Command ConvertFrom-Yaml -ErrorAction SilentlyContinue) -or -not (Get-Command ConvertTo-Yaml -ErrorAction SilentlyContinue)) {
-        throw "Discover mode YAML updates require both ConvertFrom-Yaml and ConvertTo-Yaml to be available in this PowerShell session."
-    }
-
-    $parsed=Get-Content -LiteralPath $ConfigPath -Raw | ConvertFrom-Yaml
+    $parsed=Read-AzDOConfig -ConfigPath $ConfigPath
     $orgs=if ($parsed.organizations) {@($parsed.organizations)} else {@($parsed)}
     $updated=$false
 
